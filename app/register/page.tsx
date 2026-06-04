@@ -5,6 +5,8 @@ import axios from "axios";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+const API = process.env.NEXT_PUBLIC_API_URL;
+
 export default function RegisterPage() {
   const router = useRouter();
 
@@ -22,7 +24,7 @@ export default function RegisterPage() {
 
     try {
       await axios.post(
-        "https://wingo-backend-gtqa.onrender.com/api/auth/register",
+        `${API}/api/auth/register`,
         {
           mobile,
           password,
