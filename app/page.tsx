@@ -5,6 +5,8 @@ import axios from "axios";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+const API = process.env.NEXT_PUBLIC_API_URL;
+
 export default function LoginPage() {
   const router = useRouter();
 
@@ -14,7 +16,7 @@ export default function LoginPage() {
   const login = async () => {
     try {
       const res = await axios.post(
-        "http://127.0.0.1:5000/api/auth/login",
+        `${API}/api/auth/login`,
         {
           mobile,
           password,
