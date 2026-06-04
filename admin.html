@@ -1,0 +1,39 @@
+<!-- admin.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-10">
+    <h1 class="text-3xl mb-5">Admin Control Panel</h1>
+    
+    <div class="bg-gray-800 p-6 rounded-lg w-96">
+        <label>Set Next Result:</label>
+        <select id="resultSelect" class="text-black w-full p-2 mb-4">
+            <option value="green">Green</option>
+            <option value="red">Red</option>
+        </select>
+        
+        <input type="password" id="secretKey" placeholder="Enter Admin Secret" class="text-black w-full p-2 mb-4">
+        
+        <button onclick="updateResult()" class="bg-purple-600 w-full p-2 rounded">Set Result</button>
+    </div>
+
+    <script>
+        async function updateResult() {
+            const color = document.getElementById('resultSelect').value;
+            const key = document.getElementById('secretKey').value;
+
+            const response = await fetch('http://localhost:3000/api/admin/set-result', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ color: color, secret_key: key })
+            });
+
+            const data = await response.json();
+            alert(data.message);
+        }
+    </script>
+</body>
+</html>
