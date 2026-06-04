@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
 
+const API = process.env.NEXT_PUBLIC_API_URL;
+
 export default function Dashboard() {
   const [user, setUser] = useState<any>(null);
   const [period, setPeriod] = useState("");
@@ -30,7 +32,7 @@ export default function Dashboard() {
   const loadPeriod = async () => {
     try {
       const res = await axios.get(
-        "http://127.0.0.1:5000/api/game/current-period"
+        `${API}/api/game/current-period`
       );
       setPeriod(res.data.period);
     } catch (err) {
@@ -39,7 +41,7 @@ export default function Dashboard() {
   };
 
   const placeBet = async (value: string) => {
-    await axios.post("http://127.0.0.1:5000/api/game/bet", {
+    await axios.post(`${API}/api/game/bet`, {
       userId: user.id,
       type: "color",
       value,
