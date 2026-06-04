@@ -22,7 +22,7 @@ export default function RegisterPage() {
 
     try {
       await axios.post(
-        "http://127.0.0.1:5000/api/auth/register",
+        "https://wingo-backend-gtqa.onrender.com/api/auth/register",
         {
           mobile,
           password,
