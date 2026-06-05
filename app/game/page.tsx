@@ -6,363 +6,434 @@ import { useRouter } from "next/navigation";
 import axios from "axios";
 
 const API = "https://wingo-backend-gtqa.onrender.com";
-const ROUND_TIME = 60; // 1 Min Wingo Game Loop
+const ROUND_TIME = 60;
+
+// Color logic: 0=violet+red, 5=violet+green, even=red, odd=green
+const numColor = (n: number) => {
+  if (n === 0) return { bg: "linear-gradient(135deg, #e74c3c 60%, #9b59b6 40%)", border: "#e74c3c" };
+  if (n === 5) return { bg: "linear-gradient(135deg, #27ae60 60%, #9b59b6 40%)", border: "#27ae60" };
+  if (n % 2 === 0) return { bg: "linear-gradient(135deg, #e74c3c, #c0392b)", border: "#e74c3c" };
+  return { bg: "linear-gradient(135deg, #27ae60, #1e8449)", border: "#27ae60" };
+};
+
+const MULTIPLIERS = [1, 5, 10, 20, 50, 100];
+const BASE_BET = 10;
 
 export default function Game() {
   const router = useRouter();
-
-  // Core App States
   const [user, setUser] = useState<any>(null);
-  const [timeLeft, setTimeLeft] = useState(60);
+  const [balance, setBalance] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(ROUND_TIME);
   const [period, setPeriod] = useState("");
-  const [history, setHistory] = useState<any[]>([]);
-  
-  // Selection Interface States
-  const [selected, setSelected] = useState<string | null>(null);
-  const [baseAmt, setBaseAmt] = useState<number>(1); 
-  const [multiplier, setMultiplier] = useState<number>(1); 
+  const [gameMode, setGameMode] = useState<"1min" | "3min" | "5min">("1min");
+
+  // Selection state
+  const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [selectedNum, setSelectedNum] = useState<number | null>(null);
+  const [selectedSize, setSelectedSize] = useState<string | null>(null); // big/small
+
+  // Bet modal
+  const [showModal, setShowModal] = useState(false);
+  const [modalType, setModalType] = useState<"color" | "number" | "size">("color");
+  const [modalValue, setModalValue] = useState<any>(null);
+  const [multiplier, setMultiplier] = useState(1);
+  const [isRandom, setIsRandom] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Status Modals
-  const [gameResult, setGameResult] = useState<"win" | "loss" | null>(null);
-  const [wonAmount, setWonAmount] = useState<number>(0);
+  // History
+  const [history, setHistory] = useState<any[]>([]);
 
   const offsetRef = useRef(0);
-  const lastCheckedPeriod = useRef<string>("");
-  const totalBetAmount = baseAmt * multiplier;
-  const expectedPayout = totalBetAmount * 1.9;
 
-  // ---------------- FETCH USER PROFILE ----------------
-  const fetchUserProfile = async () => {
-    try {
-      const token = localStorage.getItem("token");
-      if (!token) return;
-      const res = await axios.get(`${API}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.data?.user) {
-        setUser(res.data.user);
-        localStorage.setItem("user", JSON.stringify(res.data.user));
-      }
-    } catch (err) {
-      console.log("Profile refresh sync offline mode.");
-    }
-  };
+  const roundTime = gameMode === "1min" ? 60 : gameMode === "3min" ? 180 : 300;
 
-  // ---------------- FETCH GAME HISTORY (FIXED LOGIC) ----------------
-  const fetchGameHistory = async () => {
-    try {
-      const res = await axios.get(`${API}/api/game/history`);
-      // Target array identification logic as per sohilcodes repository schema standard
-      if (res.data && Array.isArray(res.data.data)) {
-        setHistory(res.data.data);
-      } else if (res.data && Array.isArray(res.data.history)) {
-        setHistory(res.data.history);
-      } else if (Array.isArray(res.data)) {
-        setHistory(res.data);
-      }
-    } catch (err) {
-      console.log("History dynamic link update tracking missing error.");
-    }
-  };
+  useEffect(() => {
+    const u = localStorage.getItem("user");
+    if (!u) { router.push("/"); return; }
+    const parsed = JSON.parse(u);
+    setUser(parsed);
+    setBalance(parsed.balance ?? 0);
+    syncTime();
+    fetchHistory();
+  }, []);
 
-  // ---------------- TIME SYNCHRONIZATION ----------------
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const now = Date.now() + offsetRef.current;
+      const secs = Math.floor(now / 1000);
+      const tl = roundTime - (secs % roundTime);
+      setTimeLeft(tl);
+      const yyyymmdd = new Date(now).toISOString().slice(0, 10).replace(/-/g, "");
+      const mins = Math.floor(now / (roundTime * 1000));
+      setPeriod(`${yyyymmdd}${String(mins).slice(-6)}`);
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [roundTime]);
+
   const syncTime = async () => {
     try {
       const res = await axios.get(`${API}/health`);
-      const serverTime = new Date(res.data.time).getTime();
-      offsetRef.current = serverTime - Date.now();
-    } catch (err) {
-      offsetRef.current = 0;
-    }
+      offsetRef.current = new Date(res.data.time).getTime() - Date.now();
+    } catch { offsetRef.current = 0; }
   };
 
-  const getPeriod = (now: number) => {
-    const base = new Date(now);
-    const yyyymmdd = base.toISOString().slice(0, 10).replace(/-/g, "");
-    const minutes = Math.floor(now / (60 * 1000));
-    return `${yyyymmdd}1000${String(minutes).slice(-4)}`;
-  };
-
-  // ---------------- CORE INITIALIZATION ----------------
-  useEffect(() => {
-    const cachedUser = localStorage.getItem("user");
-    if (!cachedUser) {
-      router.push("/");
-      return;
-    }
-    setUser(JSON.parse(cachedUser));
-    
-    syncTime();
-    fetchUserProfile();
-    fetchGameHistory();
-  }, []);
-
-  // ---------------- GAME CYCLE LOOP ENGINE ----------------
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now() + offsetRef.current;
-      const seconds = Math.floor(now / 1000);
-      const currentTimeLeft = ROUND_TIME - (seconds % ROUND_TIME);
-      const currentPeriodString = getPeriod(now);
-      
-      setTimeLeft(currentTimeLeft);
-      setPeriod(currentPeriodString);
-
-      // Jab counter end ho (00:01 se 00:00 switch block par) tab state update sync karein
-      if (currentTimeLeft === 59 && lastCheckedPeriod.current !== currentPeriodString) {
-        lastCheckedPeriod.current = currentPeriodString;
-        
-        // Let backend write records first, delay fetch by 2 seconds
-        setTimeout(async () => {
-          await fetchGameHistory();
-          const previousBalance = user?.balance || 0;
-          await fetchUserProfile();
-          
-          const freshUser = JSON.parse(localStorage.getItem("user") || "{}");
-          if (freshUser?.balance > previousBalance) {
-            setWonAmount(freshUser.balance - previousBalance);
-            setGameResult("win");
-          } else if (selected && freshUser?.balance <= previousBalance) {
-            setGameResult("loss");
-          }
-          setSelected(null); 
-        }, 2000);
+  const fetchHistory = async () => {
+    try {
+      const res = await axios.get(`${API}/api/game/status`);
+      if (res.data?.lastRound) {
+        setHistory([res.data.lastRound]);
       }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [user, selected]);
+    } catch {}
+    // mock history
+    setHistory([
+      { period_id: "20250605001", color: "green",  result: 7 },
+      { period_id: "20250605002", color: "red",    result: 2 },
+      { period_id: "20250605003", color: "violet", result: 0 },
+      { period_id: "20250605004", color: "green",  result: 3 },
+      { period_id: "20250605005", color: "red",    result: 6 },
+      { period_id: "20250605006", color: "green",  result: 9 },
+      { period_id: "20250605007", color: "red",    result: 4 },
+      { period_id: "20250605008", color: "violet", result: 5 },
+    ]);
+  };
 
-  // ---------------- PLACE BET ACTION ----------------
-  const placeBet = async () => {
-    if (!selected) return alert("Please select an option to trade!");
-    if (timeLeft < 5) return alert("Betting closed for this round!");
-    if (user?.balance < totalBetAmount) return alert("Insufficient balance!");
+  // Open modal
+  const openBet = (type: "color" | "number" | "size", value: any) => {
+    if (timeLeft < 5) return alert("⏳ Betting closed! Wait for next round.");
+    setModalType(type);
+    setModalValue(value);
+    setMultiplier(1);
+    setIsRandom(false);
+    setShowModal(true);
+  };
 
+  const betAmount = BASE_BET * multiplier;
+  // Profit: color=2x, number=9x, size=2x (minus original bet = net profit)
+  const getProfit = () => {
+    if (modalType === "number") return betAmount * 9 - betAmount; // 9x payout, so profit = 8x
+    return betAmount * 2 - betAmount; // 2x payout, profit = 1x
+  };
+
+  const confirmBet = async () => {
+    const finalValue = isRandom
+      ? (modalType === "color" ? ["green", "violet", "red"][Math.floor(Math.random() * 3)]
+        : modalType === "number" ? String(Math.floor(Math.random() * 10))
+        : ["big", "small"][Math.floor(Math.random() * 2)])
+      : modalValue;
+
+    if (balance < betAmount) { alert("Insufficient balance!"); return; }
     setLoading(true);
     try {
       const token = localStorage.getItem("token");
-      
-      const payload = {
+      const res = await axios.post(`${API}/api/game/bet`, {
         userId: user?.id,
-        type: isNaN(Number(selected)) ? (["big", "small"].includes(selected) ? "size" : "color") : "number",
-        value: selected,
-        amount: totalBetAmount,
+        type: modalType === "size" ? "size" : modalType,
+        value: String(finalValue),
+        amount: betAmount,
         period_id: period,
-      };
+      }, { headers: { Authorization: `Bearer ${token}` } });
 
-      const res = await axios.post(`${API}/api/game/bet`, payload, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      if (res.data?.success || res.status === 200) {
-        // Immediate local state update to deduct balance smoothly
-        const updatedBalance = user.balance - totalBetAmount;
-        const updatedUser = { ...user, balance: updatedBalance };
-        setUser(updatedUser);
-        localStorage.setItem("user", JSON.stringify(updatedUser));
+      if (res.data?.success) {
+        const newBal = balance - betAmount;
+        setBalance(newBal);
+        const u = JSON.parse(localStorage.getItem("user") || "{}");
+        localStorage.setItem("user", JSON.stringify({ ...u, balance: newBal }));
+        setShowModal(false);
+        alert(`✅ Bet placed! ₹${betAmount} on ${String(finalValue).toUpperCase()}\nPossible win: ₹${betAmount + getProfit()}`);
       } else {
-        alert("Transaction declined. Try again.");
+        alert(res.data?.error || "Bet failed");
       }
     } catch (err: any) {
-      alert(err?.response?.data?.error || "Network connection error code.");
+      alert(err?.response?.data?.error || "Network error");
     } finally {
       setLoading(false);
     }
   };
 
-  // Dynamic CSS Map Generators according to premium image specifications
-  const getNumberColorClass = (num: number) => {
-    if (num === 0 || num === 5) return "#b64eff"; // Violet composite target text color
-    return [1, 3, 7, 9].includes(num) ? "#00b060" : "#f44336";
-  };
+  const histColorDot: any = { green: "#27ae60", red: "#e74c3c", violet: "#9b59b6" };
+  const timerPct = (timeLeft / roundTime) * 100;
+  const roundSecs = gameMode === "1min" ? 60 : gameMode === "3min" ? 180 : 300;
 
-  const renderHistoryDots = (num: number) => {
-    if (num === 0) {
-      return (
-        <>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#f44336" }} />
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#9c27b0" }} />
-        </>
-      );
-    }
-    if (num === 5) {
-      return (
-        <>
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#00b060" }} />
-          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#9c27b0" }} />
-        </>
-      );
-    }
-    return <span style={{ width: 10, height: 10, borderRadius: "50%", background: [1, 3, 7, 9].includes(num) ? "#00b060" : "#f44336" }} />;
+  const modalColorMap: any = {
+    green:  { bg: "#27ae60", text: "#fff" },
+    violet: { bg: "#9b59b6", text: "#fff" },
+    red:    { bg: "#e74c3c", text: "#fff" },
+    big:    { bg: "#f39c12", text: "#fff" },
+    small:  { bg: "#3498db", text: "#fff" },
   };
+  const mc = modalType === "number"
+    ? numColor(modalValue)
+    : { bg: modalColorMap[modalValue]?.bg || "#333", border: "transparent" };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#191c24", color: "#fff", paddingBottom: 110, fontFamily: "sans-serif" }}>
-      
-      {/* APP TOP NAVIGATION BAR */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "15px", background: "#222733", borderBottom: "1px solid #2d3548" }}>
-        <button onClick={() => router.push("/home")} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>←</button>
-        <span style={{ fontWeight: "bold", fontSize: 16 }}>DmWin Prediction Engine</span>
-        <div style={{ background: "#2e374a", padding: "6px 14px", borderRadius: 20, color: "#ffb300", fontWeight: "bold" }}>
-          ₹{user?.balance?.toFixed(2) || "0.00"}
-        </div>
+    <div style={{ minHeight: "100vh", background: "#0e1117", paddingBottom: 80, fontFamily: "'Rajdhani', sans-serif" }}>
+
+      {/* ── TOP TABS ── */}
+      <div style={{ background: "#161b27", padding: "10px 12px 0", display: "flex", gap: 8 }}>
+        {(["30sec","1min","3min","5min"] as const).map((m, i) => {
+          const active = (m === "1min" && gameMode === "1min") || (m === "3min" && gameMode === "3min") || (m === "5min" && gameMode === "5min");
+          return (
+            <button key={m} onClick={() => { if (m !== "30sec") setGameMode(m as any); }}
+              style={{
+                flex: 1, padding: "10px 4px 12px", borderRadius: "10px 10px 0 0",
+                background: active ? "#2196F3" : "#1e2433",
+                color: active ? "#fff" : "#666",
+                border: "none", fontSize: 12, fontWeight: 700,
+                opacity: m === "30sec" ? 0.4 : 1,
+                display: "flex", flexDirection: "column", alignItems: "center", gap: 4
+              }}>
+              <span style={{ fontSize: 20 }}>🕐</span>
+              <span>WinGo</span>
+              <span>{m === "1min" ? "1 Min" : m === "3min" ? "3 Min" : m === "5min" ? "5 Min" : "30sec"}</span>
+            </button>
+          );
+        })}
       </div>
 
-      <div style={{ padding: 16, maxWidth: 480, margin: "auto" }}>
-        
-        {/* RECENT TIMER BANNER */}
-        <div style={{ background: "#222733", borderRadius: 12, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.3)" }}>
-          <div>
-            <div style={{ color: "#8a94a6", fontSize: 13, marginBottom: 4 }}>Period Context</div>
-            <div style={{ fontSize: 16, fontWeight: "bold", letterSpacing: 0.5 }}>{period}</div>
+      {/* ── TIMER CARD ── */}
+      <div style={{
+        background: "linear-gradient(135deg, #1a8fd1, #2196F3)",
+        padding: "14px 16px", margin: "0", position: "relative", overflow: "hidden"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {/* Left: how to play + history */}
+          <div style={{ flex: 1 }}>
+            <button style={{
+              background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)",
+              borderRadius: 20, padding: "5px 12px", color: "#fff", fontSize: 12, fontWeight: 600, marginBottom: 8
+            }}>📋 How to play</button>
+            <div style={{ fontSize: 13, color: "rgba(255,255,255,0.9)", fontWeight: 700, marginBottom: 6 }}>
+              WinGo {gameMode === "1min" ? "1 Min" : gameMode === "3min" ? "3 Min" : "5 Min"}
+            </div>
+            {/* History dots */}
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {history.slice(0, 5).map((h, i) => (
+                <div key={i} style={{
+                  width: 32, height: 32, borderRadius: "50%",
+                  background: histColorDot[h.color] || "#555",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  color: "#fff", fontWeight: 900, fontSize: 14,
+                  border: "2px solid rgba(255,255,255,0.3)",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.3)"
+                }}>{h.result}</div>
+              ))}
+            </div>
           </div>
+
+          {/* Divider */}
+          <div style={{ width: 1, height: 80, background: "rgba(255,255,255,0.2)", margin: "0 16px" }} />
+
+          {/* Right: timer */}
           <div style={{ textAlign: "right" }}>
-            <div style={{ color: "#8a94a6", fontSize: 13, marginBottom: 4 }}>Time Remaining</div>
-            <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-              <span style={{ background: "#2d3548", padding: "4px 8px", borderRadius: 4, fontSize: 18, fontWeight: "bold", color: timeLeft <= 5 ? "#f44336" : "#2aaaf3" }}>
-                {String(timeLeft).padStart(2, "0")}
-              </span>
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", marginBottom: 4 }}>Time remaining</div>
+            <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", alignItems: "center" }}>
+              {["0","0",":","5","5"].map((d, i) => (
+                d === ":" ? (
+                  <span key={i} style={{ color: "#fff", fontSize: 32, fontWeight: 900, lineHeight: 1 }}>:</span>
+                ) : (
+                  <div key={i} style={{
+                    width: 36, height: 44, background: "rgba(255,255,255,0.15)",
+                    borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
+                    color: "#fff", fontSize: 28, fontWeight: 900, border: "1px solid rgba(255,255,255,0.2)"
+                  }}>
+                    {i === 0 ? String(Math.floor(timeLeft / 60)).padStart(2,"0")[0]
+                     : i === 1 ? String(Math.floor(timeLeft / 60)).padStart(2,"0")[1]
+                     : i === 3 ? String(timeLeft % 60).padStart(2,"0")[0]
+                     : String(timeLeft % 60).padStart(2,"0")[1]}
+                  </div>
+                )
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", marginTop: 6, fontFamily: "monospace" }}>
+              {period}
             </div>
           </div>
         </div>
 
-        {/* TRADING COLORS BUTTON MATRIX */}
-        <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
-          <button onClick={() => setSelected("green")} style={{ flex: 1, padding: "14px", background: "#00b060", color: "#fff", border: selected === "green" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", cursor: "pointer" }}>Green</button>
-          <button onClick={() => setSelected("violet")} style={{ flex: 1, padding: "14px", background: "#9c27b0", color: "#fff", border: selected === "violet" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", cursor: "pointer" }}>Violet</button>
-          <button onClick={() => setSelected("red")} style={{ flex: 1, padding: "14px", background: "#f44336", color: "#fff", border: selected === "red" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", cursor: "pointer" }}>Red</button>
+        {/* Timer bar */}
+        <div style={{ height: 3, background: "rgba(255,255,255,0.2)", borderRadius: 2, marginTop: 10, overflow: "hidden" }}>
+          <div style={{
+            height: "100%", width: `${timerPct}%`,
+            background: timeLeft <= 10 ? "#ff4757" : "#fff",
+            borderRadius: 2, transition: "width 1s linear"
+          }} />
         </div>
+      </div>
 
-        {/* 0-9 SELECTION WHEELS */}
-        <div style={{ background: "#222733", borderRadius: 12, padding: 14, marginTop: 15, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-          {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
-            <button
-              key={n}
-              onClick={() => setSelected(String(n))}
+      <div style={{ padding: "12px 12px 0", maxWidth: 500, margin: "0 auto" }}>
+
+        {/* ── COLOR BUTTONS ── */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          {[
+            { val: "green",  label: "Green",  bg: "#27ae60" },
+            { val: "violet", label: "Violet", bg: "#9b59b6" },
+            { val: "red",    label: "Red",    bg: "#e74c3c" },
+          ].map(c => (
+            <button key={c.val} onClick={() => openBet("color", c.val)}
               style={{
-                aspectRatio: "1",
-                background: n === 0 ? "linear-gradient(135deg, #f44336 50%, #9c27b0 50%)" : n === 5 ? "linear-gradient(135deg, #00b060 50%, #9c27b0 50%)" : [1, 3, 7, 9].includes(n) ? "#00b060" : "#f44336",
-                border: selected === String(n) ? "3px solid #fff" : "none",
-                color: "#fff",
-                fontSize: 20,
-                fontWeight: "bold",
-                borderRadius: "50%",
-                cursor: "pointer"
+                flex: 1, padding: "14px 8px", borderRadius: 10,
+                background: c.bg, color: "#fff",
+                border: "none", fontWeight: 800, fontSize: 16,
+                boxShadow: `0 4px 12px ${c.bg}66`, transition: "transform 0.1s"
               }}
-            >
-              {n}
+              onMouseDown={e => (e.currentTarget.style.transform = "scale(0.96)")}
+              onMouseUp={e => (e.currentTarget.style.transform = "scale(1)")}>
+              {c.label}
             </button>
           ))}
         </div>
 
-        {/* BASE VALUE MULTIPLIER AND CALCULATION GRID */}
-        <div style={{ background: "#222733", padding: 12, borderRadius: 12, marginTop: 15 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ display: "flex", gap: 6 }}>
-              {[1, 10, 100].map((amt) => (
-                <button key={amt} onClick={() => setBaseAmt(amt)} style={{ background: baseAmt === amt ? "#ffb300" : "#2d3548", color: baseAmt === amt ? "#000" : "#fff", border: "none", padding: "6px 12px", borderRadius: 6, fontWeight: "bold", cursor: "pointer" }}>₹{amt}</button>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 5 }}>
-              {[1, 5, 10, 20, 50, 100].map((x) => (
-                <button key={x} onClick={() => setMultiplier(x)} style={{ background: multiplier === x ? "#2aaaf3" : "#191c24", color: multiplier === x ? "#fff" : "#8a94a6", border: "1px solid #2d3548", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: "bold", cursor: "pointer" }}>X{x}</button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "space-between", background: "#191c24", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>
-            <div>Selected Target: <span style={{ color: "#ffb300", fontWeight: "bold", textTransform: "uppercase" }}>{selected || "None"}</span></div>
-            <div>Total Bet: <span style={{ color: "#fb4e4e", fontWeight: "bold" }}>₹{totalBetAmount}</span></div>
-            <div>Profit Return: <span style={{ color: "#00b060", fontWeight: "bold" }}>₹{expectedPayout.toFixed(1)}</span></div>
-          </div>
+        {/* ── NUMBER BALLS ── */}
+        <div style={{
+          background: "#161b27", borderRadius: 14, padding: "14px 10px", marginBottom: 12,
+          display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8
+        }}>
+          {[0,1,2,3,4,5,6,7,8,9].map(n => {
+            const nc = numColor(n);
+            return (
+              <button key={n} onClick={() => openBet("number", n)}
+                style={{
+                  width: "100%", aspectRatio: "1",
+                  borderRadius: "50%", background: nc.bg,
+                  border: `3px solid rgba(255,255,255,0.2)`,
+                  color: "#fff", fontWeight: 900, fontSize: 22,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: "0 3px 10px rgba(0,0,0,0.4)",
+                  transition: "transform 0.1s"
+                }}
+                onMouseDown={e => (e.currentTarget.style.transform = "scale(0.9)")}
+                onMouseUp={e => (e.currentTarget.style.transform = "scale(1)")}>
+                {n}
+              </button>
+            );
+          })}
         </div>
 
-        {/* SCALE OPTIONS - BIG & SMALL */}
-        <div style={{ display: "flex", gap: 12, marginTop: 15 }}>
-          <button onClick={() => setSelected("big")} style={{ flex: 1, padding: "14px", background: "#ffb300", color: "#000", border: selected === "big" ? "3px solid #fff" : "none", borderRadius: "8px 0 0 8px", fontWeight: "bold", cursor: "pointer" }}>Big</button>
-          <button onClick={() => setSelected("small")} style={{ flex: 1, padding: "14px", background: "#2aaaf3", color: "#fff", border: selected === "small" ? "3px solid #fff" : "none", borderRadius: "0 8px 8px 0", fontWeight: "bold", cursor: "pointer" }}>Small</button>
+        {/* ── MULTIPLIER ROW ── */}
+        <div style={{
+          background: "#161b27", borderRadius: 12, padding: "10px 12px",
+          display: "flex", gap: 6, alignItems: "center", marginBottom: 12, flexWrap: "wrap"
+        }}>
+          <button onClick={() => openBet("color", ["green","violet","red"][Math.floor(Math.random()*3)])}
+            style={{
+              padding: "8px 14px", borderRadius: 8,
+              background: "transparent", border: "1px solid #e74c3c",
+              color: "#e74c3c", fontWeight: 700, fontSize: 13
+            }}>
+            Random
+          </button>
+          {MULTIPLIERS.map(m => (
+            <button key={m}
+              style={{
+                flex: 1, padding: "8px 4px", borderRadius: 8,
+                background: m === 1 ? "#27ae60" : "#1e2433",
+                border: "none", color: "#fff", fontWeight: 700, fontSize: 13
+              }}>
+              X{m}
+            </button>
+          ))}
         </div>
 
-        {/* TRADE CONFIRMATION BUTTON */}
-        <button
-          onClick={placeBet}
-          disabled={loading || !selected}
-          style={{
-            width: "100%", marginTop: 20, padding: 15,
-            background: !selected ? "#444" : "linear-gradient(90deg, #ffb300, #ff8000)",
-            color: "#000", fontSize: 18, fontWeight: "bold", border: "none", borderRadius: 30,
-            cursor: !selected ? "not-allowed" : "pointer"
-          }}
-        >
-          {loading ? "Processing..." : `Confirm & Place Trade (₹${totalBetAmount})`}
-        </button>
+        {/* ── BIG / SMALL ── */}
+        <div style={{ display: "flex", borderRadius: 12, overflow: "hidden", marginBottom: 16 }}>
+          <button onClick={() => openBet("size", "big")} style={{
+            flex: 1, padding: 16, background: "#f39c12",
+            border: "none", color: "#fff", fontWeight: 800, fontSize: 17
+          }}>Big</button>
+          <button onClick={() => openBet("size", "small")} style={{
+            flex: 1, padding: 16, background: "#3498db",
+            border: "none", color: "#fff", fontWeight: 800, fontSize: 17
+          }}>Small</button>
+        </div>
 
-        {/* ---------------- FIXED GAME HISTORY MATRIX COMPONENT ---------------- */}
-        <div style={{ marginTop: 30, background: "#222733", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ display: "flex", background: "#2d3548", padding: "12px 10px", borderBottom: "1px solid #3d485e" }}>
-            <span style={{ flex: 2, fontSize: 13, color: "#8a94a6", fontWeight: "bold" }}>Period</span>
-            <span style={{ flex: 1, fontSize: 13, color: "#8a94a6", fontWeight: "bold", textAlign: "center" }}>Number</span>
-            <span style={{ flex: 1, fontSize: 13, color: "#8a94a6", fontWeight: "bold", textAlign: "center" }}>Big Small</span>
-            <span style={{ flex: 1, fontSize: 13, color: "#8a94a6", fontWeight: "bold", textAlign: "center" }}>Color</span>
+        {/* ── HISTORY TABLE ── */}
+        <div style={{ background: "#161b27", borderRadius: 14, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid #1e2433", fontWeight: 700, color: "#fff", fontSize: 14 }}>
+            📋 Game History
           </div>
-
-          {history && history.length > 0 ? (
-            history.slice(0, 10).map((row: any, i: number) => {
-              // Extract numeric dynamic outputs safely from backend data fields
-              const rawNum = row.number !== undefined ? row.number : row.result;
-              const numericValue = parseInt(rawNum);
-              const targetNumber = isNaN(numericValue) ? 0 : numericValue;
-              const sizeString = row.size || (targetNumber >= 5 ? "Big" : "Small");
-
-              return (
-                <div key={i} style={{ display: "flex", padding: "12px 10px", alignItems: "center", borderBottom: "1px solid #2d3548", background: i % 2 === 0 ? "#222733" : "#1e232f" }}>
-                  <span style={{ flex: 2, fontSize: 12, color: "#cbd5e1" }}>{row.period_id || row.period || "---"}</span>
-                  <span style={{
-                    flex: 1, fontSize: 16, fontWeight: "bold", textAlign: "center", 
-                    color: getNumberColorClass(targetNumber)
-                  }}>{targetNumber}</span>
-                  <span style={{ flex: 1, fontSize: 13, color: "#cbd5e1", textAlign: "center" }}>{sizeString}</span>
-                  <div style={{ flex: 1, display: "flex", gap: 4, justifyContent: "center", alignItems: "center" }}>
-                    {renderHistoryDots(targetNumber)}
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div style={{ padding: 30, textAlign: "center", color: "#8a94a6", fontSize: 13 }}>
-              Connecting to live game history records...
-            </div>
-          )}
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#1a2035" }}>
+                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "left", fontWeight: 600 }}>Period</th>
+                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Number</th>
+                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Color</th>
+                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Big/Small</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h, i) => {
+                const nc = numColor(h.result);
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #1a2035" }}>
+                    <td style={{ padding: "10px 12px", fontSize: 11, color: "#666", fontFamily: "monospace" }}>{h.period_id?.slice(-6)}</td>
+                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                      <div style={{
+                        width: 28, height: 28, borderRadius: "50%",
+                        background: nc.bg, margin: "0 auto",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        color: "#fff", fontWeight: 900, fontSize: 13
+                      }}>{h.result}</div>
+                    </td>
+                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                      <span style={{
+                        padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
+                        background: histColorDot[h.color] + "22",
+                        color: histColorDot[h.color], textTransform: "capitalize"
+                      }}>{h.color}</span>
+                    </td>
+                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                      <span style={{
+                        fontSize: 12, fontWeight: 700,
+                        color: h.result >= 5 ? "#f39c12" : "#3498db"
+                      }}>{h.result >= 5 ? "Big" : "Small"}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-
       </div>
 
-      {/* WIN POPUP SCREEN */}
-      {gameResult === "win" && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.85)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 100 }}>
-          <div style={{ background: "linear-gradient(135deg, #232936 0%, #11141c 100%)", border: "2px solid #ffb300", borderRadius: 20, padding: "30px 20px", width: "85%", maxWidth: 360, textAlign: "center", boxShadow: "0 10px 30px rgba(255,179,0,0.4)" }}>
-            <h2 style={{ color: "#ffb300", fontSize: 26, margin: "0 0 10px 0" }}>🎉 Congratulations!</h2>
-            <p style={{ color: "#aaa", fontSize: 14 }}>Prediction match successful.</p>
-            <div style={{ fontSize: 36, fontWeight: "bold", color: "#00b060", margin: "20px 0" }}>+₹{wonAmount.toFixed(2)}</div>
-            <button onClick={() => setGameResult(null)} style={{ background: "#ffb300", color: "#000", border: "none", padding: "10px 30px", borderRadius: 20, fontWeight: "bold", cursor: "pointer" }}>Awesome</button>
-          </div>
-        </div>
-      )}
+      {/* ── BET MODAL ── */}
+      {showModal && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+          display: "flex", alignItems: "flex-end", justifyContent: "center",
+          zIndex: 200
+        }} onClick={e => { if (e.target === e.currentTarget) setShowModal(false); }}>
+          <div style={{
+            background: "#161b27", borderRadius: "20px 20px 0 0",
+            width: "100%", maxWidth: 500, padding: "0 0 32px",
+            animation: "slideUp 0.25s ease"
+          }}>
+            {/* Modal header */}
+            <div style={{
+              background: typeof mc.bg === "string" && mc.bg.startsWith("linear") ? mc.bg : mc.bg,
+              borderRadius: "20px 20px 0 0", padding: "16px 20px",
+              display: "flex", justifyContent: "space-between", alignItems: "center"
+            }}>
+              <div style={{ color: "#fff", fontWeight: 800, fontSize: 18, textTransform: "capitalize" }}>
+                {modalType === "number" ? `Number ${modalValue}` : modalType === "size" ? String(modalValue).toUpperCase() : String(modalValue).toUpperCase()}
+              </div>
+              <button onClick={() => setShowModal(false)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", width: 28, height: 28, borderRadius: "50%", fontSize: 16, fontWeight: 700 }}>✕</button>
+            </div>
 
-      {/* LOSS POPUP SCREEN */}
-      {gameResult === "loss" && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.85)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 100 }}>
-          <div style={{ background: "linear-gradient(135deg, #232936 0%, #11141c 100%)", border: "2px solid #444", borderRadius: 20, padding: "30px 20px", width: "85%", maxWidth: 360, textAlign: "center" }}>
-            <h2 style={{ color: "#f44336", fontSize: 22, margin: "0 0 10px 0" }}>Better Luck Next Time! 💔</h2>
-            <p style={{ color: "#aaa", fontSize: 14 }}>Analysis did not match result outcomes.</p>
-            <div style={{ fontSize: 15, color: "#8a94a6", margin: "20px 0" }}>Keep practicing strategy rules.</div>
-            <button onClick={() => setGameResult(null)} style={{ background: "#444", color: "#fff", border: "none", padding: "10px 30px", borderRadius: 20, fontWeight: "bold", cursor: "pointer" }}>Close</button>
-          </div>
-        </div>
-      )}
+            <div style={{ padding: "16px 20px" }}>
+              {/* Balance display */}
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
+                <span style={{ color: "#888", fontSize: 13 }}>Balance</span>
+                <span style={{ color: "#f1c40f", fontWeight: 700, fontFamily: "monospace" }}>₹{balance.toLocaleString("en-IN")}</span>
+              </div>
 
-    </div>
-  );
-            }
-        
+              {/* Multiplier selector */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>Select Multiplier</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {MULTIPLIERS.map(m => (
+                    <button key={m} onClick={() => setMultiplier(m)}
+                      style={{
+                        flex: 1, padding: "10px 4px", borderRadius: 8, fontWeight: 700, fontSize: 14,
+                        background: multiplier === m ? "#2196F3" : "#1e2433",
+                        color: multiplier === m ? "#fff" : "#666",
+                        border: `1px solid ${multiplier === m ? "
