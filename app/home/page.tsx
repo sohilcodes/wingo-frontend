@@ -3,29 +3,54 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import axios from "axios";
+
+const API = "https://wingo-backend-gtqa.onrender.com";
 
 export default function HomePage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
+  const [balance, setBalance] = useState(0);
 
   useEffect(() => {
     const u = localStorage.getItem("user");
     if (!u) { router.push("/"); return; }
-    setUser(JSON.parse(u));
+    const parsed = JSON.parse(u);
+    setUser(parsed);
+    fetchBalance(parsed.id);
   }, []);
 
-  const balance = user?.balance ?? 0;
+  const fetchBalance = async (userId: string) => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await axios.get(`${API}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data?.user) {
+        setBalance(res.data.user.balance || 0);
+        // Update localStorage bhi
+        const u = localStorage.getItem("user");
+        if (u) {
+          const parsed = JSON.parse(u);
+          parsed.balance = res.data.user.balance;
+          localStorage.setItem("user", JSON.stringify(parsed));
+        }
+      }
+    } catch {
+      // fallback to localStorage
+      const u = localStorage.getItem("user");
+      if (u) setBalance(JSON.parse(u).balance || 0);
+    }
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", paddingBottom: 90 }}>
-      {/* BG glow */}
       <div style={{
         position: "fixed", top: 0, left: 0, right: 0, height: "260px",
         background: "radial-gradient(ellipse at 30% 0%, rgba(245,197,24,0.1) 0%, transparent 70%)",
         pointerEvents: "none"
       }} />
 
-      {/* Header */}
       <div className="top-header">
         <div>
           <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: 16, fontWeight: 900, letterSpacing: 2 }} className="shimmer">
@@ -46,17 +71,12 @@ export default function HomePage() {
       </div>
 
       <div style={{ padding: "20px 20px 0", maxWidth: 480, margin: "0 auto" }}>
-        {/* Balance Card */}
         <div className="fade-up" style={{
           background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
           border: "1px solid var(--border-bright)",
-          borderRadius: 20,
-          padding: "24px 24px",
-          marginBottom: 20,
-          position: "relative",
-          overflow: "hidden"
+          borderRadius: 20, padding: "24px 24px", marginBottom: 20,
+          position: "relative", overflow: "hidden"
         }}>
-          {/* Card decoration */}
           <div style={{
             position: "absolute", right: -20, top: -20,
             width: 120, height: 120, borderRadius: "50%",
@@ -95,9 +115,7 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Stats Row */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}
-          className="fade-up">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }} className="fade-up">
           {[
             { label: "Today Wins", value: "0", icon: "🏆" },
             { label: "Total Bets", value: "0", icon: "🎯" },
@@ -111,18 +129,13 @@ export default function HomePage() {
           ))}
         </div>
 
-        {/* Section title */}
         <div style={{ fontSize: 13, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 2, marginBottom: 12 }}>
           Quick Actions
         </div>
 
-        {/* Action Grid */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }} className="fade-up">
           <Link href="/game">
-            <div className="glass-card" style={{
-              padding: "20px 16px", textAlign: "center", cursor: "pointer",
-              transition: "all 0.2s", position: "relative", overflow: "hidden"
-            }}>
+            <div className="glass-card" style={{ padding: "20px 16px", textAlign: "center", cursor: "pointer", position: "relative", overflow: "hidden" }}>
               <div style={{ fontSize: 36 }}>🎮</div>
               <div style={{ fontWeight: 700, fontSize: 16, marginTop: 8, color: "#fff" }}>Wingo Game</div>
               <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>Predict & Win</div>
@@ -160,7 +173,6 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Bottom Nav */}
       <div className="bottom-nav">
         <Link href="/home" className="nav-item active">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
@@ -185,5 +197,4 @@ export default function HomePage() {
       </div>
     </div>
   );
-                           }
-      
+      }
