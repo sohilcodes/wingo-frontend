@@ -6,42 +6,81 @@ import { useRouter } from "next/navigation";
 import axios from "axios";
 
 const API = "https://wingo-backend-gtqa.onrender.com";
-const ROUND_TIME = 60; // 1 Min Game
+const ROUND_TIME = 60; // 1 Min Wingo Game Loop
+
+interface HistoryRow {
+  period: string;
+  number: number;
+  size: string;
+  colors: string[];
+}
 
 export default function Game() {
   const router = useRouter();
 
+  // Authentication & Core User States
   const [user, setUser] = useState<any>(null);
   const [timeLeft, setTimeLeft] = useState(60);
   const [period, setPeriod] = useState("");
+  const [history, setHistory] = useState<HistoryRow[]>([]);
   
-  // Selection States
-  const [selected, setSelected] = useState<string | null>(null); // color, number, or big/small
-  const [baseAmt, setBaseAmt] = useState<number>(1); // 1 rupee base bet
-  const [multiplier, setMultiplier] = useState<number>(1); // X1, X5, X10, etc.
+  // Custom Selection Interface States
+  const [selected, setSelected] = useState<string | null>(null);
+  const [baseAmt, setBaseAmt] = useState<number>(1); // Base amounts: ₹1, ₹10, ₹100
+  const [multiplier, setMultiplier] = useState<number>(1); // Multipliers: X1, X5, X10, X20, X50, X100
   const [loading, setLoading] = useState(false);
 
+  // Status Animation Overlay Modals
+  const [gameResult, setGameResult] = useState<"win" | "loss" | null>(null);
+  const [wonAmount, setWonAmount] = useState<number>(0);
+
   const offsetRef = useRef(0);
-
-  // Total amount calculated instantly
   const totalBetAmount = baseAmt * multiplier;
-  // Profit calculation (₹10 bet yields ₹19 returns -> 1.9x ratio)
-  const expectedPayout = totalBetAmount * 1.9;
+  const expectedPayout = totalBetAmount * 1.9; // Profit payout calculation logic
 
-  // ---------------- GET SERVER TIME ----------------
+  // ---------------- FETCH USER PROFILE ----------------
+  const fetchUserProfile = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) return;
+      // Agar backend par customize me get user endpoint hai toh direct use karein
+      const res = await axios.get(`${API}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.data?.user) {
+        setUser(res.data.user);
+        localStorage.setItem("user", JSON.stringify(res.data.user));
+      }
+    } catch (err) {
+      console.log("Profile refresh failed, using cache storage.");
+    }
+  };
+
+  // ---------------- FETCH GAME HISTORY ----------------
+  const fetchGameHistory = async () => {
+    try {
+      const res = await axios.get(`${API}/api/game/history`);
+      if (res.data?.history) {
+        setHistory(res.data.history);
+      } else if (Array.isArray(res.data)) {
+        setHistory(res.data);
+      }
+    } catch (err) {
+      console.log("Error loading game history results from backend");
+    }
+  };
+
+  // ---------------- TIME SYNCHRONIZATION ----------------
   const syncTime = async () => {
     try {
       const res = await axios.get(`${API}/health`);
       const serverTime = new Date(res.data.time).getTime();
-      const clientTime = Date.now();
-      offsetRef.current = serverTime - clientTime;
+      offsetRef.current = serverTime - Date.now();
     } catch (err) {
-      console.log("Time sync failed, using local time");
       offsetRef.current = 0;
     }
   };
 
-  // ---------------- PERIOD CALCULATION ----------------
   const getPeriod = (now: number) => {
     const base = new Date(now);
     const yyyymmdd = base.toISOString().slice(0, 10).replace(/-/g, "");
@@ -49,18 +88,21 @@ export default function Game() {
     return `${yyyymmdd}1000${String(minutes).slice(-4)}`;
   };
 
-  // ---------------- INIT ----------------
+  // ---------------- INITIAL CORE INITIALIZATION ----------------
   useEffect(() => {
-    const u = localStorage.getItem("user");
-    if (!u) {
+    const cachedUser = localStorage.getItem("user");
+    if (!cachedUser) {
       router.push("/");
       return;
     }
-    setUser(JSON.parse(u));
+    setUser(JSON.parse(cachedUser));
+    
     syncTime();
+    fetchUserProfile();
+    fetchGameHistory();
   }, []);
 
-  // ---------------- TIMER LOOP ----------------
+  // ---------------- TICK ENGINE & GAME LOOP CALCULATION ----------------
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now() + offsetRef.current;
@@ -69,11 +111,31 @@ export default function Game() {
       
       setTimeLeft(currentTimeLeft);
       setPeriod(getPeriod(now));
+
+      // Trigger automatic results and animations when a new game period cycle completes (At 00:59 seconds mark)
+      if (currentTimeLeft === 59) {
+        fetchGameHistory();
+        // Dynamic balance sync helps verify if the last placed bet resulted in a win or loss balance jump
+        const previousBalance = user?.balance || 0;
+        
+        setTimeout(async () => {
+          await fetchUserProfile();
+          const freshUser = JSON.parse(localStorage.getItem("user") || "{}");
+          
+          if (freshUser?.balance > previousBalance) {
+            setWonAmount(freshUser.balance - previousBalance);
+            setGameResult("win");
+          } else if (selected && freshUser?.balance <= previousBalance) {
+            setGameResult("loss");
+          }
+          setSelected(null); // Reset choice for next interval round
+        }, 1500); 
+      }
     }, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [user, selected]);
 
-  // ---------------- PLACE BET ----------------
+  // ---------------- PLACE BET ACTION ----------------
   const placeBet = async () => {
     if (!selected) return alert("Please select an option to trade!");
     if (timeLeft < 5) return alert("Betting closed for this round!");
@@ -83,88 +145,78 @@ export default function Game() {
     try {
       const token = localStorage.getItem("token");
       
-      const res = await axios.post(
-        `${API}/api/game/bet`,
-        {
-          userId: user?.id,
-          type: isNaN(Number(selected)) ? (["big", "small"].includes(selected) ? "size" : "color") : "number",
-          value: selected,
-          amount: totalBetAmount,
-          period_id: period,
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const payload = {
+        userId: user?.id,
+        type: isNaN(Number(selected)) ? (["big", "small"].includes(selected) ? "size" : "color") : "number",
+        value: selected,
+        amount: totalBetAmount,
+        period_id: period,
+      };
+
+      const res = await axios.post(`${API}/api/game/bet`, payload, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
       if (res.data?.success || res.status === 200) {
-        // Instant Live Balance Update on Success
+        // Safe immediate local calculation state update
         const updatedBalance = user.balance - totalBetAmount;
         const updatedUser = { ...user, balance: updatedBalance };
         setUser(updatedUser);
         localStorage.setItem("user", JSON.stringify(updatedUser));
-        
-        alert(`Bet placed successfully! Amount: ₹${totalBetAmount}`);
       } else {
-        alert("Failed to place bet");
+        alert("Transaction declined. Try again.");
       }
     } catch (err: any) {
-      alert(err?.response?.data?.error || "Network error");
+      alert(err?.response?.data?.error || "Network connection error code.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Colors mapping for styling numbers exactly like screenshot
-  const getNumberBg = (n: number) => {
-    if (n === 0) return "linear-gradient(135deg, #fb4e4e 50%, #b64eff 50%)";
-    if (n === 5) return "linear-gradient(135deg, #2aaaf3 50%, #b64eff 50%)";
-    if ([1, 3, 7, 9].includes(n)) return "#2aaaf3"; // Green/Blueish as per image
-    return "#fb4e4e"; // Red
+  const getNumberColor = (num: number) => {
+    if (num === 0) return "linear-gradient(135deg, #f44336 50%, #9c27b0 50%)";
+    if (num === 5) return "linear-gradient(135deg, #00b060 50%, #9c27b0 50%)";
+    return [1, 3, 7, 9].includes(num) ? "#00b060" : "#f44336";
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "#191c24", color: "#fff", paddingBottom: 100, fontFamily: "sans-serif" }}>
+    <div style={{ minHeight: "100vh", background: "#191c24", color: "#fff", paddingBottom: 110, fontFamily: "sans-serif" }}>
       
-      {/* HEADER */}
+      {/* APP TOP NAVIGATION BAR */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "15px", background: "#222733", borderBottom: "1px solid #2d3548" }}>
         <button onClick={() => router.push("/home")} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>←</button>
-        <span style={{ fontWeight: "bold", fontSize: 16 }}>🎮 WinGo 1 Min</span>
-        <div style={{ background: "#2e374a", padding: "6px 12px", borderRadius: 20, color: "#ffb300", fontWeight: "bold" }}>
+        <span style={{ fontWeight: "bold", fontSize: 16 }}>DmWin Prediction Engine</span>
+        <div style={{ background: "#2e374a", padding: "6px 14px", borderRadius: 20, color: "#ffb300", fontWeight: "bold" }}>
           ₹{user?.balance?.toFixed(2) || "0.00"}
         </div>
       </div>
 
       <div style={{ padding: 16, maxWidth: 480, margin: "auto" }}>
         
-        {/* TIMER & PERIOD CARD */}
+        {/* RECENT TIMER BANNER */}
         <div style={{ background: "#222733", borderRadius: 12, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 10px rgba(0,0,0,0.3)" }}>
           <div>
-            <div style={{ color: "#8a94a6", fontSize: 13, marginBottom: 4 }}>Period Record</div>
+            <div style={{ color: "#8a94a6", fontSize: 13, marginBottom: 4 }}>Period Context</div>
             <div style={{ fontSize: 16, fontWeight: "bold", letterSpacing: 0.5 }}>{period}</div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ color: "#8a94a6", fontSize: 13, marginBottom: 4 }}>Time remaining</div>
+            <div style={{ color: "#8a94a6", fontSize: 13, marginBottom: 4 }}>Time Remaining</div>
             <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-              <span style={{ background: "#2d3548", padding: "4px 6px", borderRadius: 4, fontSize: 18, fontWeight: "bold" }}>0</span>
-              <span style={{ background: "#2d3548", padding: "4px 6px", borderRadius: 4, fontSize: 18, fontWeight: "bold" }}>0</span>
-              <span style={{ color: "#2aaaf3", fontSize: 18, fontWeight: "bold" }}>:</span>
-              <span style={{ background: "#2d3548", padding: "4px 6px", borderRadius: 4, fontSize: 18, fontWeight: "bold", color: timeLeft <= 5 ? "#fb4e4e" : "#2aaaf3" }}>
-                {String(Math.floor(timeLeft / 10))}
-              </span>
-              <span style={{ background: "#2d3548", padding: "4px 6px", borderRadius: 4, fontSize: 18, fontWeight: "bold", color: timeLeft <= 5 ? "#fb4e4e" : "#2aaaf3" }}>
-                {String(timeLeft % 10)}
+              <span style={{ background: "#2d3548", padding: "4px 8px", borderRadius: 4, fontSize: 18, fontWeight: "bold", color: timeLeft <= 5 ? "#f44336" : "#2aaaf3" }}>
+                {String(timeLeft).padStart(2, "0")}
               </span>
             </div>
           </div>
         </div>
 
-        {/* THREE MAIN COLOR BUTTONS */}
+        {/* TRADING COLORS BUTTON MATRIX */}
         <div style={{ display: "flex", gap: 12, marginTop: 20 }}>
-          <button onClick={() => setSelected("green")} style={{ flex: 1, padding: "14px", background: "#00b060", color: "#fff", border: selected === "green" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", fontSize: 16, cursor: "pointer", boxShadow: "0 4px 6px rgba(0,0,0,0.2)" }}>Green</button>
-          <button onClick={() => setSelected("violet")} style={{ flex: 1, padding: "14px", background: "#9c27b0", color: "#fff", border: selected === "violet" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", fontSize: 16, cursor: "pointer", boxShadow: "0 4px 6px rgba(0,0,0,0.2)" }}>Violet</button>
-          <button onClick={() => setSelected("red")} style={{ flex: 1, padding: "14px", background: "#f44336", color: "#fff", border: selected === "red" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", fontSize: 16, cursor: "pointer", boxShadow: "0 4px 6px rgba(0,0,0,0.2)" }}>Red</button>
+          <button onClick={() => setSelected("green")} style={{ flex: 1, padding: "14px", background: "#00b060", color: "#fff", border: selected === "green" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", cursor: "pointer" }}>Green</button>
+          <button onClick={() => setSelected("violet")} style={{ flex: 1, padding: "14px", background: "#9c27b0", color: "#fff", border: selected === "violet" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", cursor: "pointer" }}>Violet</button>
+          <button onClick={() => setSelected("red")} style={{ flex: 1, padding: "14px", background: "#f44336", color: "#fff", border: selected === "red" ? "3px solid #fff" : "none", borderRadius: 8, fontWeight: "bold", cursor: "pointer" }}>Red</button>
         </div>
 
-        {/* NUMBERS GRID (0-9) */}
+        {/* 0-9 SELECTION WHEELS */}
         <div style={{ background: "#222733", borderRadius: 12, padding: 14, marginTop: 15, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
           {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
             <button
@@ -172,17 +224,14 @@ export default function Game() {
               onClick={() => setSelected(String(n))}
               style={{
                 aspectRatio: "1",
-                background: getNumberBg(n),
+                background: typeof getNumberColor(n) === "string" ? (getNumberColor(n) as string) : undefined,
+                backgroundImage: typeof getNumberColor(n) !== "string" ? (getNumberColor(n) as string) : undefined,
                 border: selected === String(n) ? "3px solid #fff" : "none",
                 color: "#fff",
                 fontSize: 20,
                 fontWeight: "bold",
                 borderRadius: "50%",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                boxShadow: "inset 0 -4px 4px rgba(0,0,0,0.3)"
+                cursor: "pointer"
               }}
             >
               {n}
@@ -190,116 +239,104 @@ export default function Game() {
           ))}
         </div>
 
-        {/* MULTIPLIER SLIDER / SELECTOR */}
+        {/* BASE VALUE MULTIPLIER AND CALCULATION GRID */}
         <div style={{ background: "#222733", padding: 12, borderRadius: 12, marginTop: 15 }}>
-          <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginBottom: 10 }}>
-            {/* Base Rupee Selectors */}
-            {/* User can select starting base: ₹1, ₹10, ₹100 */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
             <div style={{ display: "flex", gap: 6 }}>
               {[1, 10, 100].map((amt) => (
-                <button
-                  key={amt}
-                  onClick={() => setBaseAmt(amt)}
-                  style={{
-                    background: baseAmt === amt ? "#ffb300" : "#2d3548",
-                    color: baseAmt === amt ? "#000" : "#fff",
-                    border: "none",
-                    padding: "6px 12px",
-                    borderRadius: 6,
-                    fontWeight: "bold",
-                    cursor: "pointer"
-                  }}
-                >
-                  ₹{amt}
-                </button>
+                <button key={amt} onClick={() => setBaseAmt(amt)} style={{ background: baseAmt === amt ? "#ffb300" : "#2d3548", color: baseAmt === amt ? "#000" : "#fff", border: "none", padding: "6px 12px", borderRadius: 6, fontWeight: "bold", cursor: "pointer" }}>₹{amt}</button>
               ))}
             </div>
-
-            {/* Multipliers */}
-            <div style={{ display: "flex", gap: 5, overflowX: "auto" }}>
+            <div style={{ display: "flex", gap: 5 }}>
               {[1, 5, 10, 20, 50, 100].map((x) => (
-                <button
-                  key={x}
-                  onClick={() => setMultiplier(x)}
-                  style={{
-                    background: multiplier === x ? "#2aaaf3" : "#191c24",
-                    color: multiplier === x ? "#fff" : "#8a94a6",
-                    border: "1px solid #2d3548",
-                    padding: "6px 10px",
-                    borderRadius: 6,
-                    fontSize: 12,
-                    fontWeight: "bold",
-                    cursor: "pointer"
-                  }}
-                >
-                  X{x}
-                </button>
+                <button key={x} onClick={() => setMultiplier(x)} style={{ background: multiplier === x ? "#2aaaf3" : "#191c24", color: multiplier === x ? "#fff" : "#8a94a6", border: "1px solid #2d3548", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: "bold", cursor: "pointer" }}>X{x}</button>
               ))}
             </div>
           </div>
 
-          {/* DYNAMIC PROFIT CALCULATION BOX */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#191c24", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>
-            <div>
-              Selected: <span style={{ color: "#ffb300", fontWeight: "bold", textTransform: "uppercase" }}>{selected || "None"}</span>
-            </div>
-            <div>
-              Total Bet: <span style={{ color: "#fb4e4e", fontWeight: "bold" }}>₹{totalBetAmount}</span>
-            </div>
-            <div>
-              Est. Payout: <span style={{ color: "#00b060", fontWeight: "bold" }}>₹{expectedPayout.toFixed(1)}</span>
-            </div>
+          <div style={{ display: "flex", justifyContent: "space-between", background: "#191c24", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>
+            <div>Selected Target: <span style={{ color: "#ffb300", fontWeight: "bold", textTransform: "uppercase" }}>{selected || "None"}</span></div>
+            <div>Total Bet: <span style={{ color: "#fb4e4e", fontWeight: "bold" }}>₹{totalBetAmount}</span></div>
+            <div>Profit Return: <span style={{ color: "#00b060", fontWeight: "bold" }}>₹{expectedPayout.toFixed(1)}</span></div>
           </div>
         </div>
 
-        {/* BIG & SMALL BUTTONS */}
+        {/* SCALE OPTIONS - BIG & SMALL */}
         <div style={{ display: "flex", gap: 12, marginTop: 15 }}>
-          <button onClick={() => setSelected("big")} style={{ flex: 1, padding: "14px", background: "#ffb300", color: "#000", border: selected === "big" ? "3px solid #fff" : "none", borderRadius: "8px 0 0 8px", fontWeight: "bold", fontSize: 16, cursor: "pointer" }}>Big</button>
-          <button onClick={() => setSelected("small")} style={{ flex: 1, padding: "14px", background: "#2aaaf3", color: "#fff", border: selected === "small" ? "3px solid #fff" : "none", borderRadius: "0 8px 8px 0", fontWeight: "bold", fontSize: 16, cursor: "pointer" }}>Small</button>
+          <button onClick={() => setSelected("big")} style={{ flex: 1, padding: "14px", background: "#ffb300", color: "#000", border: selected === "big" ? "3px solid #fff" : "none", borderRadius: "8px 0 0 8px", fontWeight: "bold", cursor: "pointer" }}>Big</button>
+          <button onClick={() => setSelected("small")} style={{ flex: 1, padding: "14px", background: "#2aaaf3", color: "#fff", border: selected === "small" ? "3px solid #fff" : "none", borderRadius: "0 8px 8px 0", fontWeight: "bold", cursor: "pointer" }}>Small</button>
         </div>
 
-        {/* SUBMIT ACTION BUTTON */}
+        {/* TRADE CONFIRMATION CALL UP */}
         <button
           onClick={placeBet}
           disabled={loading || !selected}
           style={{
-            width: "100%",
-            marginTop: 20,
-            padding: 15,
+            width: "100%", marginTop: 20, padding: 15,
             background: !selected ? "#444" : "linear-gradient(90deg, #ffb300, #ff8000)",
-            color: !selected ? "#aaa" : "#000",
-            fontSize: 18,
-            fontWeight: "bold",
-            border: "none",
-            borderRadius: 30,
-            cursor: !selected ? "not-allowed" : "pointer",
-            boxShadow: "0 5px 15px rgba(255,128,0,0.3)"
+            color: "#000", fontSize: 18, fontWeight: "bold", border: "none", borderRadius: 30,
+            cursor: !selected ? "not-allowed" : "pointer"
           }}
         >
-          {loading ? "Processing..." : `Confirm & Place Bet (₹${totalBetAmount})`}
+          {loading ? "Processing..." : `Confirm & Place Trade (₹${totalBetAmount})`}
         </button>
 
+        {/* REAL DYNAMIC HISTORY COMPONENT LOGIC */}
+        <div style={{ marginTop: 30, background: "#222733", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ display: "flex", background: "#2d3548", padding: "12px 10px", borderBottom: "1px solid #3d485e" }}>
+            <span style={{ flex: 2, fontSize: 13, color: "#8a94a6", fontWeight: "bold" }}>Period</span>
+            <span style={{ flex: 1, fontSize: 13, color: "#8a94a6", fontWeight: "bold", textAlign: "center" }}>Number</span>
+            <span style={{ flex: 1, fontSize: 13, color: "#8a94a6", fontWeight: "bold", textAlign: "center" }}>Big Small</span>
+            <span style={{ flex: 1, fontSize: 13, color: "#8a94a6", fontWeight: "bold", textAlign: "center" }}>Color</span>
+          </div>
+
+          {history.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", color: "#8a94a6", fontSize: 13 }}>No game records found.</div>
+          ) : (
+            history.slice(0, 10).map((row, i) => (
+              <div key={i} style={{ display: "flex", padding: "12px 10px", alignItems: "center", borderBottom: "1px solid #2d3548", background: i % 2 === 0 ? "#222733" : "#1e232f" }}>
+                <span style={{ flex: 2, fontSize: 12, color: "#cbd5e1" }}>{row.period}</span>
+                <span style={{
+                  flex: 1, fontSize: 16, fontWeight: "bold", textAlign: "center", 
+                  color: row.number === 0 || row.number === 5 ? "#b64eff" : [1,3,7,9].includes(row.number) ? "#00b060" : "#f44336" 
+                }}>{row.number}</span>
+                <span style={{ flex: 1, fontSize: 13, color: "#cbd5e1", textAlign: "center" }}>{row.size || (row.number >= 5 ? "Big" : "Small")}</span>
+                <div style={{ flex: 1, display: "flex", gap: 4, justifyContent: "center" }}>
+                  {row.colors?.map((color, idx) => (
+                    <span key={idx} style={{ width: 10, height: 10, borderRadius: "50%", background: color }} />
+                  )) || <span style={{ width: 10, height: 10, borderRadius: "50%", background: [1,3,7,9].includes(row.number) ? "#00b060" : "#f44336" }} />}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
       </div>
 
-      {/* BOTTOM NAVIGATION BAR */}
-      <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#222733", display: "flex", justifyContent: "space-around", padding: "12px 0", borderTop: "1px solid #2d3548", zIndex: 10 }}>
-        {["Home", "Deposit", "Game", "Withdraw", "Profile"].map((tab) => (
-          <Link 
-            key={tab} 
-            href={`/${tab.toLowerCase()}`} 
-            style={{ 
-              color: tab === "Game" ? "#2aaaf3" : "#8a94a6", 
-              textDecoration: "none", 
-              fontSize: 12, 
-              fontWeight: tab === "Game" ? "bold" : "normal" 
-            }}
-          >
-            {tab}
-          </Link>
-        ))}
-      </div>
+      {/* WIN ANIMATION OVERLAY */}
+      {gameResult === "win" && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.85)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 100 }}>
+          <div style={{ background: "linear-gradient(135deg, #232936 0%, #11141c 100%)", border: "2px solid #ffb300", borderRadius: 20, padding: "30px 20px", width: "85%", maxWidth: 360, textAlign: "center", boxShadow: "0 10px 30px rgba(255,179,0,0.4)" }}>
+            <h2 style={{ color: "#ffb300", fontSize: 26, margin: "0 0 10px 0" }}>🎉 Congratulations!</h2>
+            <p style={{ color: "#aaa", fontSize: 14 }}>Prediction match successful.</p>
+            <div style={{ fontSize: 36, fontWeight: "bold", color: "#00b060", margin: "20px 0" }}>+₹{wonAmount.toFixed(2)}</div>
+            <button onClick={() => setGameResult(null)} style={{ background: "#ffb300", color: "#000", border: "none", padding: "10px 30px", borderRadius: 20, fontWeight: "bold", cursor: "pointer" }}>Awesome</button>
+          </div>
+        </div>
+      )}
+
+      {/* LOSS ANIMATION OVERLAY */}
+      {gameResult === "loss" && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.85)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 100 }}>
+          <div style={{ background: "linear-gradient(135deg, #232936 0%, #11141c 100%)", border: "2px solid #444", borderRadius: 20, padding: "30px 20px", width: "85%", maxWidth: 360, textAlign: "center" }}>
+            <h2 style={{ color: "#f44336", fontSize: 22, margin: "0 0 10px 0" }}>Better Luck Next Time! 💔</h2>
+            <p style={{ color: "#aaa", fontSize: 14 }}>Analysis did not match result outcomes.</p>
+            <div style={{ fontSize: 15, color: "#8a94a6", margin: "20px 0" }}>Keep practicing strategy rules.</div>
+            <button onClick={() => setGameResult(null)} style={{ background: "#444", color: "#fff", border: "none", padding: "10px 30px", borderRadius: 20, fontWeight: "bold", cursor: "pointer" }}>Close</button>
+          </div>
+        </div>
+      )}
 
     </div>
   );
-                         }
-                                                                
+}
