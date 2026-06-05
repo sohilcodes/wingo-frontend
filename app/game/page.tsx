@@ -8,42 +8,35 @@ import axios from "axios";
 const API = "https://wingo-backend-gtqa.onrender.com";
 const ROUND_TIME = 60; // 1 Min Wingo Game Loop
 
-interface HistoryRow {
-  period: string;
-  number: number;
-  size: string;
-  colors: string[];
-}
-
 export default function Game() {
   const router = useRouter();
 
-  // Authentication & Core User States
+  // Core App States
   const [user, setUser] = useState<any>(null);
   const [timeLeft, setTimeLeft] = useState(60);
   const [period, setPeriod] = useState("");
-  const [history, setHistory] = useState<HistoryRow[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
   
-  // Custom Selection Interface States
+  // Selection Interface States
   const [selected, setSelected] = useState<string | null>(null);
-  const [baseAmt, setBaseAmt] = useState<number>(1); // Base amounts: ₹1, ₹10, ₹100
-  const [multiplier, setMultiplier] = useState<number>(1); // Multipliers: X1, X5, X10, X20, X50, X100
+  const [baseAmt, setBaseAmt] = useState<number>(1); 
+  const [multiplier, setMultiplier] = useState<number>(1); 
   const [loading, setLoading] = useState(false);
 
-  // Status Animation Overlay Modals
+  // Status Modals
   const [gameResult, setGameResult] = useState<"win" | "loss" | null>(null);
   const [wonAmount, setWonAmount] = useState<number>(0);
 
   const offsetRef = useRef(0);
+  const lastCheckedPeriod = useRef<string>("");
   const totalBetAmount = baseAmt * multiplier;
-  const expectedPayout = totalBetAmount * 1.9; // Profit payout calculation logic
+  const expectedPayout = totalBetAmount * 1.9;
 
   // ---------------- FETCH USER PROFILE ----------------
   const fetchUserProfile = async () => {
     try {
       const token = localStorage.getItem("token");
       if (!token) return;
-      // Agar backend par customize me get user endpoint hai toh direct use karein
       const res = await axios.get(`${API}/api/auth/me`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -52,21 +45,24 @@ export default function Game() {
         localStorage.setItem("user", JSON.stringify(res.data.user));
       }
     } catch (err) {
-      console.log("Profile refresh failed, using cache storage.");
+      console.log("Profile refresh sync offline mode.");
     }
   };
 
-  // ---------------- FETCH GAME HISTORY ----------------
+  // ---------------- FETCH GAME HISTORY (FIXED LOGIC) ----------------
   const fetchGameHistory = async () => {
     try {
       const res = await axios.get(`${API}/api/game/history`);
-      if (res.data?.history) {
+      // Target array identification logic as per sohilcodes repository schema standard
+      if (res.data && Array.isArray(res.data.data)) {
+        setHistory(res.data.data);
+      } else if (res.data && Array.isArray(res.data.history)) {
         setHistory(res.data.history);
       } else if (Array.isArray(res.data)) {
         setHistory(res.data);
       }
     } catch (err) {
-      console.log("Error loading game history results from backend");
+      console.log("History dynamic link update tracking missing error.");
     }
   };
 
@@ -88,7 +84,7 @@ export default function Game() {
     return `${yyyymmdd}1000${String(minutes).slice(-4)}`;
   };
 
-  // ---------------- INITIAL CORE INITIALIZATION ----------------
+  // ---------------- CORE INITIALIZATION ----------------
   useEffect(() => {
     const cachedUser = localStorage.getItem("user");
     if (!cachedUser) {
@@ -102,34 +98,36 @@ export default function Game() {
     fetchGameHistory();
   }, []);
 
-  // ---------------- TICK ENGINE & GAME LOOP CALCULATION ----------------
+  // ---------------- GAME CYCLE LOOP ENGINE ----------------
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now() + offsetRef.current;
       const seconds = Math.floor(now / 1000);
       const currentTimeLeft = ROUND_TIME - (seconds % ROUND_TIME);
+      const currentPeriodString = getPeriod(now);
       
       setTimeLeft(currentTimeLeft);
-      setPeriod(getPeriod(now));
+      setPeriod(currentPeriodString);
 
-      // Trigger automatic results and animations when a new game period cycle completes (At 00:59 seconds mark)
-      if (currentTimeLeft === 59) {
-        fetchGameHistory();
-        // Dynamic balance sync helps verify if the last placed bet resulted in a win or loss balance jump
-        const previousBalance = user?.balance || 0;
+      // Jab counter end ho (00:01 se 00:00 switch block par) tab state update sync karein
+      if (currentTimeLeft === 59 && lastCheckedPeriod.current !== currentPeriodString) {
+        lastCheckedPeriod.current = currentPeriodString;
         
+        // Let backend write records first, delay fetch by 2 seconds
         setTimeout(async () => {
+          await fetchGameHistory();
+          const previousBalance = user?.balance || 0;
           await fetchUserProfile();
-          const freshUser = JSON.parse(localStorage.getItem("user") || "{}");
           
+          const freshUser = JSON.parse(localStorage.getItem("user") || "{}");
           if (freshUser?.balance > previousBalance) {
             setWonAmount(freshUser.balance - previousBalance);
             setGameResult("win");
           } else if (selected && freshUser?.balance <= previousBalance) {
             setGameResult("loss");
           }
-          setSelected(null); // Reset choice for next interval round
-        }, 1500); 
+          setSelected(null); 
+        }, 2000);
       }
     }, 1000);
     return () => clearInterval(interval);
@@ -158,7 +156,7 @@ export default function Game() {
       });
 
       if (res.data?.success || res.status === 200) {
-        // Safe immediate local calculation state update
+        // Immediate local state update to deduct balance smoothly
         const updatedBalance = user.balance - totalBetAmount;
         const updatedUser = { ...user, balance: updatedBalance };
         setUser(updatedUser);
@@ -173,10 +171,30 @@ export default function Game() {
     }
   };
 
-  const getNumberColor = (num: number) => {
-    if (num === 0) return "linear-gradient(135deg, #f44336 50%, #9c27b0 50%)";
-    if (num === 5) return "linear-gradient(135deg, #00b060 50%, #9c27b0 50%)";
+  // Dynamic CSS Map Generators according to premium image specifications
+  const getNumberColorClass = (num: number) => {
+    if (num === 0 || num === 5) return "#b64eff"; // Violet composite target text color
     return [1, 3, 7, 9].includes(num) ? "#00b060" : "#f44336";
+  };
+
+  const renderHistoryDots = (num: number) => {
+    if (num === 0) {
+      return (
+        <>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#f44336" }} />
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#9c27b0" }} />
+        </>
+      );
+    }
+    if (num === 5) {
+      return (
+        <>
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#00b060" }} />
+          <span style={{ width: 10, height: 10, borderRadius: "50%", background: "#9c27b0" }} />
+        </>
+      );
+    }
+    return <span style={{ width: 10, height: 10, borderRadius: "50%", background: [1, 3, 7, 9].includes(num) ? "#00b060" : "#f44336" }} />;
   };
 
   return (
@@ -224,8 +242,7 @@ export default function Game() {
               onClick={() => setSelected(String(n))}
               style={{
                 aspectRatio: "1",
-                background: typeof getNumberColor(n) === "string" ? (getNumberColor(n) as string) : undefined,
-                backgroundImage: typeof getNumberColor(n) !== "string" ? (getNumberColor(n) as string) : undefined,
+                background: n === 0 ? "linear-gradient(135deg, #f44336 50%, #9c27b0 50%)" : n === 5 ? "linear-gradient(135deg, #00b060 50%, #9c27b0 50%)" : [1, 3, 7, 9].includes(n) ? "#00b060" : "#f44336",
                 border: selected === String(n) ? "3px solid #fff" : "none",
                 color: "#fff",
                 fontSize: 20,
@@ -267,7 +284,7 @@ export default function Game() {
           <button onClick={() => setSelected("small")} style={{ flex: 1, padding: "14px", background: "#2aaaf3", color: "#fff", border: selected === "small" ? "3px solid #fff" : "none", borderRadius: "0 8px 8px 0", fontWeight: "bold", cursor: "pointer" }}>Small</button>
         </div>
 
-        {/* TRADE CONFIRMATION CALL UP */}
+        {/* TRADE CONFIRMATION BUTTON */}
         <button
           onClick={placeBet}
           disabled={loading || !selected}
@@ -281,7 +298,7 @@ export default function Game() {
           {loading ? "Processing..." : `Confirm & Place Trade (₹${totalBetAmount})`}
         </button>
 
-        {/* REAL DYNAMIC HISTORY COMPONENT LOGIC */}
+        {/* ---------------- FIXED GAME HISTORY MATRIX COMPONENT ---------------- */}
         <div style={{ marginTop: 30, background: "#222733", borderRadius: 12, overflow: "hidden" }}>
           <div style={{ display: "flex", background: "#2d3548", padding: "12px 10px", borderBottom: "1px solid #3d485e" }}>
             <span style={{ flex: 2, fontSize: 13, color: "#8a94a6", fontWeight: "bold" }}>Period</span>
@@ -290,30 +307,38 @@ export default function Game() {
             <span style={{ flex: 1, fontSize: 13, color: "#8a94a6", fontWeight: "bold", textAlign: "center" }}>Color</span>
           </div>
 
-          {history.length === 0 ? (
-            <div style={{ padding: 20, textAlign: "center", color: "#8a94a6", fontSize: 13 }}>No game records found.</div>
-          ) : (
-            history.slice(0, 10).map((row, i) => (
-              <div key={i} style={{ display: "flex", padding: "12px 10px", alignItems: "center", borderBottom: "1px solid #2d3548", background: i % 2 === 0 ? "#222733" : "#1e232f" }}>
-                <span style={{ flex: 2, fontSize: 12, color: "#cbd5e1" }}>{row.period}</span>
-                <span style={{
-                  flex: 1, fontSize: 16, fontWeight: "bold", textAlign: "center", 
-                  color: row.number === 0 || row.number === 5 ? "#b64eff" : [1,3,7,9].includes(row.number) ? "#00b060" : "#f44336" 
-                }}>{row.number}</span>
-                <span style={{ flex: 1, fontSize: 13, color: "#cbd5e1", textAlign: "center" }}>{row.size || (row.number >= 5 ? "Big" : "Small")}</span>
-                <div style={{ flex: 1, display: "flex", gap: 4, justifyContent: "center" }}>
-                  {row.colors?.map((color, idx) => (
-                    <span key={idx} style={{ width: 10, height: 10, borderRadius: "50%", background: color }} />
-                  )) || <span style={{ width: 10, height: 10, borderRadius: "50%", background: [1,3,7,9].includes(row.number) ? "#00b060" : "#f44336" }} />}
+          {history && history.length > 0 ? (
+            history.slice(0, 10).map((row: any, i: number) => {
+              // Extract numeric dynamic outputs safely from backend data fields
+              const rawNum = row.number !== undefined ? row.number : row.result;
+              const numericValue = parseInt(rawNum);
+              const targetNumber = isNaN(numericValue) ? 0 : numericValue;
+              const sizeString = row.size || (targetNumber >= 5 ? "Big" : "Small");
+
+              return (
+                <div key={i} style={{ display: "flex", padding: "12px 10px", alignItems: "center", borderBottom: "1px solid #2d3548", background: i % 2 === 0 ? "#222733" : "#1e232f" }}>
+                  <span style={{ flex: 2, fontSize: 12, color: "#cbd5e1" }}>{row.period_id || row.period || "---"}</span>
+                  <span style={{
+                    flex: 1, fontSize: 16, fontWeight: "bold", textAlign: "center", 
+                    color: getNumberColorClass(targetNumber)
+                  }}>{targetNumber}</span>
+                  <span style={{ flex: 1, fontSize: 13, color: "#cbd5e1", textAlign: "center" }}>{sizeString}</span>
+                  <div style={{ flex: 1, display: "flex", gap: 4, justifyContent: "center", alignItems: "center" }}>
+                    {renderHistoryDots(targetNumber)}
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
+          ) : (
+            <div style={{ padding: 30, textAlign: "center", color: "#8a94a6", fontSize: 13 }}>
+              Connecting to live game history records...
+            </div>
           )}
         </div>
 
       </div>
 
-      {/* WIN ANIMATION OVERLAY */}
+      {/* WIN POPUP SCREEN */}
       {gameResult === "win" && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.85)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 100 }}>
           <div style={{ background: "linear-gradient(135deg, #232936 0%, #11141c 100%)", border: "2px solid #ffb300", borderRadius: 20, padding: "30px 20px", width: "85%", maxWidth: 360, textAlign: "center", boxShadow: "0 10px 30px rgba(255,179,0,0.4)" }}>
@@ -325,7 +350,7 @@ export default function Game() {
         </div>
       )}
 
-      {/* LOSS ANIMATION OVERLAY */}
+      {/* LOSS POPUP SCREEN */}
       {gameResult === "loss" && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.85)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 100 }}>
           <div style={{ background: "linear-gradient(135deg, #232936 0%, #11141c 100%)", border: "2px solid #444", borderRadius: 20, padding: "30px 20px", width: "85%", maxWidth: 360, textAlign: "center" }}>
@@ -339,4 +364,5 @@ export default function Game() {
 
     </div>
   );
-}
+            }
+        
