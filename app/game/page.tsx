@@ -84,7 +84,7 @@ export default function Game() {
       if (res.data?.rounds?.length > 0) {
         setHistory(res.data.rounds.map((r: any) => ({
           period_id: r.period_id,
-          result: r.num,
+          result: r.result,
           color: r.color,
         })));
         return;
