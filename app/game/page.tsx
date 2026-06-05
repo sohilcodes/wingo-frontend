@@ -6,9 +6,7 @@ import { useRouter } from "next/navigation";
 import axios from "axios";
 
 const API = "https://wingo-backend-gtqa.onrender.com";
-const ROUND_TIME = 60;
 
-// Color logic: 0=violet+red, 5=violet+green, even=red, odd=green
 const numColor = (n: number) => {
   if (n === 0) return { bg: "linear-gradient(135deg, #e74c3c 60%, #9b59b6 40%)", border: "#e74c3c" };
   if (n === 5) return { bg: "linear-gradient(135deg, #27ae60 60%, #9b59b6 40%)", border: "#27ae60" };
@@ -23,27 +21,21 @@ export default function Game() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [balance, setBalance] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(ROUND_TIME);
+  const [timeLeft, setTimeLeft] = useState(60);
   const [period, setPeriod] = useState("");
   const [gameMode, setGameMode] = useState<"1min" | "3min" | "5min">("1min");
-
-  // Selection state
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [selectedNum, setSelectedNum] = useState<number | null>(null);
-  const [selectedSize, setSelectedSize] = useState<string | null>(null); // big/small
-
-  // Bet modal
+  const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [modalType, setModalType] = useState<"color" | "number" | "size">("color");
   const [modalValue, setModalValue] = useState<any>(null);
   const [multiplier, setMultiplier] = useState(1);
   const [isRandom, setIsRandom] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  // History
   const [history, setHistory] = useState<any[]>([]);
-
   const offsetRef = useRef(0);
+  const prevPeriodRef = useRef("");
 
   const roundTime = gameMode === "1min" ? 60 : gameMode === "3min" ? 180 : 300;
 
@@ -56,6 +48,14 @@ export default function Game() {
     syncTime();
     fetchHistory();
   }, []);
+
+  // Refresh history when new round starts
+  useEffect(() => {
+    if (timeLeft === roundTime - 1 && prevPeriodRef.current && prevPeriodRef.current !== period) {
+      fetchHistory();
+    }
+    prevPeriodRef.current = period;
+  }, [period]);
 
   useEffect(() => {
     const iv = setInterval(() => {
@@ -77,27 +77,22 @@ export default function Game() {
     } catch { offsetRef.current = 0; }
   };
 
+  // ✅ REAL history from backend
   const fetchHistory = async () => {
     try {
-      const res = await axios.get(`${API}/api/game/status`);
-      if (res.data?.lastRound) {
-        setHistory([res.data.lastRound]);
+      const res = await axios.get(`${API}/api/game/history`);
+      if (res.data?.rounds?.length > 0) {
+        setHistory(res.data.rounds.map((r: any) => ({
+          period_id: r.period_id,
+          result: r.num,
+          color: r.color,
+        })));
+        return;
       }
     } catch {}
-    // mock history
-    setHistory([
-      { period_id: "20250605001", color: "green",  result: 7 },
-      { period_id: "20250605002", color: "red",    result: 2 },
-      { period_id: "20250605003", color: "violet", result: 0 },
-      { period_id: "20250605004", color: "green",  result: 3 },
-      { period_id: "20250605005", color: "red",    result: 6 },
-      { period_id: "20250605006", color: "green",  result: 9 },
-      { period_id: "20250605007", color: "red",    result: 4 },
-      { period_id: "20250605008", color: "violet", result: 5 },
-    ]);
+    setHistory([]);
   };
 
-  // Open modal
   const openBet = (type: "color" | "number" | "size", value: any) => {
     if (timeLeft < 5) return alert("⏳ Betting closed! Wait for next round.");
     setModalType(type);
@@ -108,10 +103,10 @@ export default function Game() {
   };
 
   const betAmount = BASE_BET * multiplier;
-  // Profit: color=2x, number=9x, size=2x (minus original bet = net profit)
+
   const getProfit = () => {
-    if (modalType === "number") return betAmount * 9 - betAmount; // 9x payout, so profit = 8x
-    return betAmount * 2 - betAmount; // 2x payout, profit = 1x
+    if (modalType === "number") return betAmount * 9 - betAmount;
+    return betAmount * 2 - betAmount;
   };
 
   const confirmBet = async () => {
@@ -152,14 +147,13 @@ export default function Game() {
 
   const histColorDot: any = { green: "#27ae60", red: "#e74c3c", violet: "#9b59b6" };
   const timerPct = (timeLeft / roundTime) * 100;
-  const roundSecs = gameMode === "1min" ? 60 : gameMode === "3min" ? 180 : 300;
 
   const modalColorMap: any = {
-    green:  { bg: "#27ae60", text: "#fff" },
-    violet: { bg: "#9b59b6", text: "#fff" },
-    red:    { bg: "#e74c3c", text: "#fff" },
-    big:    { bg: "#f39c12", text: "#fff" },
-    small:  { bg: "#3498db", text: "#fff" },
+    green:  { bg: "#27ae60" },
+    violet: { bg: "#9b59b6" },
+    red:    { bg: "#e74c3c" },
+    big:    { bg: "#f39c12" },
+    small:  { bg: "#3498db" },
   };
   const mc = modalType === "number"
     ? numColor(modalValue)
@@ -168,10 +162,10 @@ export default function Game() {
   return (
     <div style={{ minHeight: "100vh", background: "#0e1117", paddingBottom: 80, fontFamily: "'Rajdhani', sans-serif" }}>
 
-      {/* ── TOP TABS ── */}
+      {/* TOP TABS */}
       <div style={{ background: "#161b27", padding: "10px 12px 0", display: "flex", gap: 8 }}>
-        {(["30sec","1min","3min","5min"] as const).map((m, i) => {
-          const active = (m === "1min" && gameMode === "1min") || (m === "3min" && gameMode === "3min") || (m === "5min" && gameMode === "5min");
+        {(["30sec", "1min", "3min", "5min"] as const).map((m) => {
+          const active = m === gameMode || (m === "1min" && gameMode === "1min");
           return (
             <button key={m} onClick={() => { if (m !== "30sec") setGameMode(m as any); }}
               style={{
@@ -190,13 +184,12 @@ export default function Game() {
         })}
       </div>
 
-      {/* ── TIMER CARD ── */}
+      {/* TIMER CARD */}
       <div style={{
         background: "linear-gradient(135deg, #1a8fd1, #2196F3)",
-        padding: "14px 16px", margin: "0", position: "relative", overflow: "hidden"
+        padding: "14px 16px", position: "relative", overflow: "hidden"
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          {/* Left: how to play + history */}
           <div style={{ flex: 1 }}>
             <button style={{
               background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)",
@@ -205,7 +198,6 @@ export default function Game() {
             <div style={{ fontSize: 13, color: "rgba(255,255,255,0.9)", fontWeight: 700, marginBottom: 6 }}>
               WinGo {gameMode === "1min" ? "1 Min" : gameMode === "3min" ? "3 Min" : "5 Min"}
             </div>
-            {/* History dots */}
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
               {history.slice(0, 5).map((h, i) => (
                 <div key={i} style={{
@@ -220,26 +212,25 @@ export default function Game() {
             </div>
           </div>
 
-          {/* Divider */}
           <div style={{ width: 1, height: 80, background: "rgba(255,255,255,0.2)", margin: "0 16px" }} />
 
-          {/* Right: timer */}
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", marginBottom: 4 }}>Time remaining</div>
             <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", alignItems: "center" }}>
-              {["0","0",":","5","5"].map((d, i) => (
+              {[0, 1, ":", 2, 3].map((d, i) => (
                 d === ":" ? (
                   <span key={i} style={{ color: "#fff", fontSize: 32, fontWeight: 900, lineHeight: 1 }}>:</span>
                 ) : (
                   <div key={i} style={{
                     width: 36, height: 44, background: "rgba(255,255,255,0.15)",
                     borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
-                    color: "#fff", fontSize: 28, fontWeight: 900, border: "1px solid rgba(255,255,255,0.2)"
+                    color: timeLeft <= 10 ? "#ff4757" : "#fff", fontSize: 28, fontWeight: 900,
+                    border: "1px solid rgba(255,255,255,0.2)"
                   }}>
-                    {i === 0 ? String(Math.floor(timeLeft / 60)).padStart(2,"0")[0]
-                     : i === 1 ? String(Math.floor(timeLeft / 60)).padStart(2,"0")[1]
-                     : i === 3 ? String(timeLeft % 60).padStart(2,"0")[0]
-                     : String(timeLeft % 60).padStart(2,"0")[1]}
+                    {i === 0 ? String(Math.floor(timeLeft / 60)).padStart(2, "0")[0]
+                      : i === 1 ? String(Math.floor(timeLeft / 60)).padStart(2, "0")[1]
+                      : i === 3 ? String(timeLeft % 60).padStart(2, "0")[0]
+                      : String(timeLeft % 60).padStart(2, "0")[1]}
                   </div>
                 )
               ))}
@@ -250,7 +241,6 @@ export default function Game() {
           </div>
         </div>
 
-        {/* Timer bar */}
         <div style={{ height: 3, background: "rgba(255,255,255,0.2)", borderRadius: 2, marginTop: 10, overflow: "hidden" }}>
           <div style={{
             height: "100%", width: `${timerPct}%`,
@@ -262,18 +252,18 @@ export default function Game() {
 
       <div style={{ padding: "12px 12px 0", maxWidth: 500, margin: "0 auto" }}>
 
-        {/* ── COLOR BUTTONS ── */}
+        {/* COLOR BUTTONS */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           {[
-            { val: "green",  label: "Green",  bg: "#27ae60" },
+            { val: "green", label: "Green", bg: "#27ae60" },
             { val: "violet", label: "Violet", bg: "#9b59b6" },
-            { val: "red",    label: "Red",    bg: "#e74c3c" },
+            { val: "red", label: "Red", bg: "#e74c3c" },
           ].map(c => (
             <button key={c.val} onClick={() => openBet("color", c.val)}
               style={{
                 flex: 1, padding: "14px 8px", borderRadius: 10,
-                background: c.bg, color: "#fff",
-                border: "none", fontWeight: 800, fontSize: 16,
+                background: c.bg, color: "#fff", border: "none",
+                fontWeight: 800, fontSize: 16,
                 boxShadow: `0 4px 12px ${c.bg}66`, transition: "transform 0.1s"
               }}
               onMouseDown={e => (e.currentTarget.style.transform = "scale(0.96)")}
@@ -283,23 +273,22 @@ export default function Game() {
           ))}
         </div>
 
-        {/* ── NUMBER BALLS ── */}
+        {/* NUMBER BALLS */}
         <div style={{
           background: "#161b27", borderRadius: 14, padding: "14px 10px", marginBottom: 12,
           display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8
         }}>
-          {[0,1,2,3,4,5,6,7,8,9].map(n => {
+          {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => {
             const nc = numColor(n);
             return (
               <button key={n} onClick={() => openBet("number", n)}
                 style={{
                   width: "100%", aspectRatio: "1",
                   borderRadius: "50%", background: nc.bg,
-                  border: `3px solid rgba(255,255,255,0.2)`,
+                  border: "3px solid rgba(255,255,255,0.2)",
                   color: "#fff", fontWeight: 900, fontSize: 22,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  boxShadow: "0 3px 10px rgba(0,0,0,0.4)",
-                  transition: "transform 0.1s"
+                  boxShadow: "0 3px 10px rgba(0,0,0,0.4)", transition: "transform 0.1s"
                 }}
                 onMouseDown={e => (e.currentTarget.style.transform = "scale(0.9)")}
                 onMouseUp={e => (e.currentTarget.style.transform = "scale(1)")}>
@@ -309,12 +298,12 @@ export default function Game() {
           })}
         </div>
 
-        {/* ── MULTIPLIER ROW ── */}
+        {/* MULTIPLIER ROW */}
         <div style={{
           background: "#161b27", borderRadius: 12, padding: "10px 12px",
           display: "flex", gap: 6, alignItems: "center", marginBottom: 12, flexWrap: "wrap"
         }}>
-          <button onClick={() => openBet("color", ["green","violet","red"][Math.floor(Math.random()*3)])}
+          <button onClick={() => openBet("color", ["green", "violet", "red"][Math.floor(Math.random() * 3)])}
             style={{
               padding: "8px 14px", borderRadius: 8,
               background: "transparent", border: "1px solid #e74c3c",
@@ -334,7 +323,7 @@ export default function Game() {
           ))}
         </div>
 
-        {/* ── BIG / SMALL ── */}
+        {/* BIG / SMALL */}
         <div style={{ display: "flex", borderRadius: 12, overflow: "hidden", marginBottom: 16 }}>
           <button onClick={() => openBet("size", "big")} style={{
             flex: 1, padding: 16, background: "#f39c12",
@@ -346,87 +335,92 @@ export default function Game() {
           }}>Small</button>
         </div>
 
-        {/* ── HISTORY TABLE ── */}
+        {/* HISTORY TABLE */}
         <div style={{ background: "#161b27", borderRadius: 14, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: "1px solid #1e2433", fontWeight: 700, color: "#fff", fontSize: 14 }}>
             📋 Game History
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#1a2035" }}>
-                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "left", fontWeight: 600 }}>Period</th>
-                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Number</th>
-                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Color</th>
-                <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Big/Small</th>
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((h, i) => {
-                const nc = numColor(h.result);
-                return (
-                  <tr key={i} style={{ borderBottom: "1px solid #1a2035" }}>
-                    <td style={{ padding: "10px 12px", fontSize: 11, color: "#666", fontFamily: "monospace" }}>{h.period_id?.slice(-6)}</td>
-                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                      <div style={{
-                        width: 28, height: 28, borderRadius: "50%",
-                        background: nc.bg, margin: "0 auto",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        color: "#fff", fontWeight: 900, fontSize: 13
-                      }}>{h.result}</div>
-                    </td>
-                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                      <span style={{
-                        padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
-                        background: histColorDot[h.color] + "22",
-                        color: histColorDot[h.color], textTransform: "capitalize"
-                      }}>{h.color}</span>
-                    </td>
-                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                      <span style={{
-                        fontSize: 12, fontWeight: 700,
-                        color: h.result >= 5 ? "#f39c12" : "#3498db"
-                      }}>{h.result >= 5 ? "Big" : "Small"}</span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          {history.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: "#555", fontSize: 13 }}>
+              No history yet — play some rounds!
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#1a2035" }}>
+                  <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "left", fontWeight: 600 }}>Period</th>
+                  <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Number</th>
+                  <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Color</th>
+                  <th style={{ padding: "8px 12px", fontSize: 11, color: "#666", textAlign: "center", fontWeight: 600 }}>Big/Small</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((h, i) => {
+                  const nc = numColor(h.result);
+                  return (
+                    <tr key={i} style={{ borderBottom: "1px solid #1a2035" }}>
+                      <td style={{ padding: "10px 12px", fontSize: 11, color: "#666", fontFamily: "monospace" }}>{h.period_id?.slice(-6)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                        <div style={{
+                          width: 28, height: 28, borderRadius: "50%",
+                          background: nc.bg, margin: "0 auto",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          color: "#fff", fontWeight: 900, fontSize: 13
+                        }}>{h.result}</div>
+                      </td>
+                      <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                        <span style={{
+                          padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700,
+                          background: (histColorDot[h.color] || "#555") + "22",
+                          color: histColorDot[h.color] || "#fff", textTransform: "capitalize"
+                        }}>{h.color}</span>
+                      </td>
+                      <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                        <span style={{
+                          fontSize: 12, fontWeight: 700,
+                          color: h.result >= 5 ? "#f39c12" : "#3498db"
+                        }}>{h.result >= 5 ? "Big" : "Small"}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
-      {/* ── BET MODAL ── */}
+      {/* BET MODAL */}
       {showModal && (
         <div style={{
           position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
-          display: "flex", alignItems: "flex-end", justifyContent: "center",
-          zIndex: 200
+          display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 200
         }} onClick={e => { if (e.target === e.currentTarget) setShowModal(false); }}>
           <div style={{
             background: "#161b27", borderRadius: "20px 20px 0 0",
             width: "100%", maxWidth: 500, padding: "0 0 32px",
             animation: "slideUp 0.25s ease"
           }}>
-            {/* Modal header */}
             <div style={{
               background: typeof mc.bg === "string" && mc.bg.startsWith("linear") ? mc.bg : mc.bg,
               borderRadius: "20px 20px 0 0", padding: "16px 20px",
               display: "flex", justifyContent: "space-between", alignItems: "center"
             }}>
               <div style={{ color: "#fff", fontWeight: 800, fontSize: 18, textTransform: "capitalize" }}>
-                {modalType === "number" ? `Number ${modalValue}` : modalType === "size" ? String(modalValue).toUpperCase() : String(modalValue).toUpperCase()}
+                {modalType === "number" ? `Number ${modalValue}` : String(modalValue).toUpperCase()}
               </div>
-              <button onClick={() => setShowModal(false)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", width: 28, height: 28, borderRadius: "50%", fontSize: 16, fontWeight: 700 }}>✕</button>
+              <button onClick={() => setShowModal(false)} style={{
+                background: "rgba(255,255,255,0.2)", border: "none", color: "#fff",
+                width: 28, height: 28, borderRadius: "50%", fontSize: 16, fontWeight: 700
+              }}>✕</button>
             </div>
 
             <div style={{ padding: "16px 20px" }}>
-              {/* Balance display */}
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
                 <span style={{ color: "#888", fontSize: 13 }}>Balance</span>
                 <span style={{ color: "#f1c40f", fontWeight: 700, fontFamily: "monospace" }}>₹{balance.toLocaleString("en-IN")}</span>
               </div>
 
-              {/* Multiplier selector */}
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>Select Multiplier</div>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -445,7 +439,6 @@ export default function Game() {
                 </div>
               </div>
 
-              {/* Bet summary */}
               <div style={{
                 background: "#0e1117", borderRadius: 12, padding: "14px 16px",
                 marginBottom: 16, border: "1px solid #1e2433"
@@ -473,17 +466,15 @@ export default function Game() {
                 </div>
               </div>
 
-              {/* Payout info */}
               <div style={{
                 background: "rgba(33,150,243,0.08)", border: "1px solid rgba(33,150,243,0.2)",
                 borderRadius: 8, padding: "8px 12px", marginBottom: 16, fontSize: 12, color: "#888"
               }}>
                 {modalType === "number"
-                  ? `🎯 Number bet payout: 9× (net profit: 8×)`
-                  : `🎯 Color/Size bet payout: 2× (net profit: 1×)`}
+                  ? "🎯 Number bet payout: 9× (net profit: 8×)"
+                  : "🎯 Color/Size bet payout: 2× (net profit: 1×)"}
               </div>
 
-              {/* Confirm button */}
               <button onClick={confirmBet} disabled={loading || balance < betAmount}
                 style={{
                   width: "100%", padding: "15px",
