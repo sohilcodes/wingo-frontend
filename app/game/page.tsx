@@ -436,4 +436,84 @@ export default function Game() {
                         flex: 1, padding: "10px 4px", borderRadius: 8, fontWeight: 700, fontSize: 14,
                         background: multiplier === m ? "#2196F3" : "#1e2433",
                         color: multiplier === m ? "#fff" : "#666",
-                        border: `1px solid ${multiplier === m ? "
+                        border: `1px solid ${multiplier === m ? "#2196F3" : "#2a3040"}`,
+                        transition: "all 0.15s"
+                      }}>
+                      X{m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Bet summary */}
+              <div style={{
+                background: "#0e1117", borderRadius: 12, padding: "14px 16px",
+                marginBottom: 16, border: "1px solid #1e2433"
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ color: "#888", fontSize: 13 }}>Bet Amount</span>
+                  <span style={{ color: "#fff", fontWeight: 700, fontFamily: "monospace" }}>₹{betAmount}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ color: "#888", fontSize: 13 }}>Multiplier</span>
+                  <span style={{ color: "#2196F3", fontWeight: 700 }}>X{multiplier} (Base ₹{BASE_BET})</span>
+                </div>
+                <div style={{ height: 1, background: "#1e2433", margin: "8px 0" }} />
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ color: "#888", fontSize: 13 }}>Possible Win</span>
+                  <span style={{ color: "#27ae60", fontWeight: 800, fontFamily: "monospace", fontSize: 16 }}>
+                    ₹{(betAmount + getProfit()).toLocaleString("en-IN")}
+                  </span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#888", fontSize: 12 }}>Net Profit</span>
+                  <span style={{ color: "#f1c40f", fontWeight: 700, fontFamily: "monospace" }}>
+                    +₹{getProfit().toLocaleString("en-IN")}
+                  </span>
+                </div>
+              </div>
+
+              {/* Payout info */}
+              <div style={{
+                background: "rgba(33,150,243,0.08)", border: "1px solid rgba(33,150,243,0.2)",
+                borderRadius: 8, padding: "8px 12px", marginBottom: 16, fontSize: 12, color: "#888"
+              }}>
+                {modalType === "number"
+                  ? `🎯 Number bet payout: 9× (net profit: 8×)`
+                  : `🎯 Color/Size bet payout: 2× (net profit: 1×)`}
+              </div>
+
+              {/* Confirm button */}
+              <button onClick={confirmBet} disabled={loading || balance < betAmount}
+                style={{
+                  width: "100%", padding: "15px",
+                  background: balance < betAmount ? "#333" : "linear-gradient(135deg, #27ae60, #2ecc71)",
+                  border: "none", borderRadius: 12, color: "#fff",
+                  fontWeight: 800, fontSize: 17, transition: "all 0.2s",
+                  opacity: balance < betAmount ? 0.5 : 1
+                }}>
+                {loading ? "Placing..." : balance < betAmount ? "Insufficient Balance" : `✅ Confirm ₹${betAmount}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes slideUp {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
+        }
+      `}</style>
+
+      {/* BOTTOM NAV */}
+      <div className="bottom-nav">
+        <Link href="/home" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg><span>Home</span></Link>
+        <Link href="/deposit" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-4H7l5-5 5 5h-4v4z"/></svg><span>Deposit</span></Link>
+        <Link href="/game" className="nav-item active"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5S14.67 12 15.5 12s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4-3c-.83 0-1.5-.67-1.5-1.5S18.67 9 19.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg><span>Game</span></Link>
+        <Link href="/withdraw" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-4H7l5-5 5 5h-4v4z" transform="rotate(180 12 12)"/></svg><span>Withdraw</span></Link>
+        <Link href="/profile" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg><span>Profile</span></Link>
+      </div>
+    </div>
+  );
+}
