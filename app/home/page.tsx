@@ -17,10 +17,10 @@ export default function HomePage() {
     if (!u) { router.push("/"); return; }
     const parsed = JSON.parse(u);
     setUser(parsed);
-    fetchBalance(parsed.id);
+    fetchBalance();
   }, []);
 
-  const fetchBalance = async (userId: string) => {
+  const fetchBalance = async () => {
     try {
       const token = localStorage.getItem("token");
       const res = await axios.get(`${API}/api/auth/me`, {
@@ -28,7 +28,6 @@ export default function HomePage() {
       });
       if (res.data?.user) {
         setBalance(res.data.user.balance || 0);
-        // Update localStorage bhi
         const u = localStorage.getItem("user");
         if (u) {
           const parsed = JSON.parse(u);
@@ -37,7 +36,6 @@ export default function HomePage() {
         }
       }
     } catch {
-      // fallback to localStorage
       const u = localStorage.getItem("user");
       if (u) setBalance(JSON.parse(u).balance || 0);
     }
@@ -51,6 +49,7 @@ export default function HomePage() {
         pointerEvents: "none"
       }} />
 
+      {/* Header */}
       <div className="top-header">
         <div>
           <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: 16, fontWeight: 900, letterSpacing: 2 }} className="shimmer">
@@ -71,10 +70,12 @@ export default function HomePage() {
       </div>
 
       <div style={{ padding: "20px 20px 0", maxWidth: 480, margin: "0 auto" }}>
+
+        {/* Balance Card */}
         <div className="fade-up" style={{
           background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
           border: "1px solid var(--border-bright)",
-          borderRadius: 20, padding: "24px 24px", marginBottom: 20,
+          borderRadius: 20, padding: "24px", marginBottom: 20,
           position: "relative", overflow: "hidden"
         }}>
           <div style={{
@@ -102,77 +103,108 @@ export default function HomePage() {
               <button style={{
                 width: "100%", padding: "10px", borderRadius: 10,
                 background: "var(--green)", color: "#fff", border: "none",
-                fontWeight: 700, fontSize: 14, letterSpacing: 0.5
+                fontWeight: 700, fontSize: 14
               }}>+ Deposit</button>
             </Link>
             <Link href="/withdraw" style={{ flex: 1 }}>
               <button style={{
                 width: "100%", padding: "10px", borderRadius: 10,
                 background: "transparent", color: "var(--gold)", border: "1px solid var(--border-bright)",
-                fontWeight: 700, fontSize: 14, letterSpacing: 0.5
+                fontWeight: 700, fontSize: 14
               }}>↑ Withdraw</button>
             </Link>
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }} className="fade-up">
-          {[
-            { label: "Today Wins", value: "0", icon: "🏆" },
-            { label: "Total Bets", value: "0", icon: "🎯" },
-            { label: "Win Rate", value: "0%", icon: "📊" },
-          ].map(s => (
-            <div key={s.label} className="glass-card" style={{ padding: "14px 10px", textAlign: "center" }}>
-              <div style={{ fontSize: 20 }}>{s.icon}</div>
-              <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: 16, fontWeight: 700, color: "var(--gold)", marginTop: 4 }}>{s.value}</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
-
+        {/* Games Section */}
         <div style={{ fontSize: 13, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 2, marginBottom: 12 }}>
-          Quick Actions
+          🎮 Games
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }} className="fade-up">
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }} className="fade-up">
+
+          {/* Wingo 1 Min */}
           <Link href="/game">
-            <div className="glass-card" style={{ padding: "20px 16px", textAlign: "center", cursor: "pointer", position: "relative", overflow: "hidden" }}>
-              <div style={{ fontSize: 36 }}>🎮</div>
-              <div style={{ fontWeight: 700, fontSize: 16, marginTop: 8, color: "#fff" }}>Wingo Game</div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>Predict & Win</div>
+            <div style={{
+              background: "linear-gradient(135deg, #0f3460, #16213e)",
+              border: "1px solid rgba(99,102,241,0.4)",
+              borderRadius: 16, padding: "18px 20px",
+              display: "flex", alignItems: "center", gap: 16,
+              cursor: "pointer", position: "relative", overflow: "hidden"
+            }}>
               <div style={{
-                position: "absolute", top: 10, right: 10,
-                background: "var(--green)", color: "#fff",
-                fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, letterSpacing: 0.5
-              }}>LIVE</div>
+                position: "absolute", right: -10, top: -10,
+                width: 80, height: 80, borderRadius: "50%",
+                background: "radial-gradient(circle, rgba(99,102,241,0.2), transparent 70%)"
+              }} />
+              <div style={{
+                width: 56, height: 56, borderRadius: 14,
+                background: "linear-gradient(135deg, #6366f1, #818cf8)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 28, flexShrink: 0,
+                boxShadow: "0 4px 16px rgba(99,102,241,0.4)"
+              }}>🎯</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 800, fontSize: 17, color: "#fff", marginBottom: 3 }}>Wingo 1 Min</div>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>Color prediction game • 1 min rounds</div>
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <span style={{
+                    background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)",
+                    color: "#22c55e", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20
+                  }}>🟢 LIVE</span>
+                  <span style={{
+                    background: "rgba(245,197,24,0.1)", border: "1px solid rgba(245,197,24,0.2)",
+                    color: "var(--gold)", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20
+                  }}>2x WIN</span>
+                </div>
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 20 }}>›</div>
             </div>
           </Link>
 
-          <Link href="/deposit">
-            <div className="glass-card" style={{ padding: "20px 16px", textAlign: "center", cursor: "pointer" }}>
-              <div style={{ fontSize: 36 }}>💰</div>
-              <div style={{ fontWeight: 700, fontSize: 16, marginTop: 8, color: "#fff" }}>Deposit</div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>Add Funds</div>
+          {/* Aviator */}
+          <Link href="/aviator">
+            <div style={{
+              background: "linear-gradient(135deg, #1a0a2e, #2d1b4e)",
+              border: "1px solid rgba(239,68,68,0.4)",
+              borderRadius: 16, padding: "18px 20px",
+              display: "flex", alignItems: "center", gap: 16,
+              cursor: "pointer", position: "relative", overflow: "hidden"
+            }}>
+              <div style={{
+                position: "absolute", right: -10, top: -10,
+                width: 80, height: 80, borderRadius: "50%",
+                background: "radial-gradient(circle, rgba(239,68,68,0.2), transparent 70%)"
+              }} />
+              <div style={{
+                width: 56, height: 56, borderRadius: 14,
+                background: "linear-gradient(135deg, #ef4444, #f87171)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 28, flexShrink: 0,
+                boxShadow: "0 4px 16px rgba(239,68,68,0.4)"
+              }}>✈️</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 800, fontSize: 17, color: "#fff", marginBottom: 3 }}>Aviator</div>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.5)" }}>Cash out before the plane flies away!</div>
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <span style={{
+                    background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)",
+                    color: "#f87171", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20
+                  }}>🔥 HOT</span>
+                  <span style={{
+                    background: "rgba(245,197,24,0.1)", border: "1px solid rgba(245,197,24,0.2)",
+                    color: "var(--gold)", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20
+                  }}>100x WIN</span>
+                </div>
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 20 }}>›</div>
             </div>
           </Link>
 
-          <Link href="/withdraw">
-            <div className="glass-card" style={{ padding: "20px 16px", textAlign: "center", cursor: "pointer" }}>
-              <div style={{ fontSize: 36 }}>💸</div>
-              <div style={{ fontWeight: 700, fontSize: 16, marginTop: 8, color: "#fff" }}>Withdraw</div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>Cash Out</div>
-            </div>
-          </Link>
-
-          <Link href="/profile">
-            <div className="glass-card" style={{ padding: "20px 16px", textAlign: "center", cursor: "pointer" }}>
-              <div style={{ fontSize: 36 }}>👤</div>
-              <div style={{ fontWeight: 700, fontSize: 16, marginTop: 8, color: "#fff" }}>Profile</div>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 3 }}>My Account</div>
-            </div>
-          </Link>
         </div>
       </div>
 
+      {/* Bottom Nav */}
       <div className="bottom-nav">
         <Link href="/home" className="nav-item active">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
@@ -182,9 +214,9 @@ export default function HomePage() {
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-4H7l5-5 5 5h-4v4z"/></svg>
           <span>Deposit</span>
         </Link>
-        <Link href="/game" className="nav-item">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5S14.67 12 15.5 12s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4-3c-.83 0-1.5-.67-1.5-1.5S18.67 9 19.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
-          <span>Game</span>
+        <Link href="/refer" className="nav-item">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          <span>Refer</span>
         </Link>
         <Link href="/withdraw" className="nav-item">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-4H7l5-5 5 5h-4v4z" transform="rotate(180 12 12)"/></svg>
@@ -197,4 +229,4 @@ export default function HomePage() {
       </div>
     </div>
   );
-      }
+}
