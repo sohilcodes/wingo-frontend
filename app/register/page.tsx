@@ -2,25 +2,36 @@
 
 import Link from "next/link";
 import axios from "axios";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 const API = "https://wingo-backend-gtqa.onrender.com";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mobile, setMobile] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [refCode, setRefCode] = useState("");
+
+  useEffect(() => {
+    const ref = searchParams.get("ref");
+    if (ref) setRefCode(ref);
+  }, [searchParams]);
 
   const register = async () => {
     if (!mobile || !password || !confirmPassword) return alert("Please fill all fields");
     if (password !== confirmPassword) return alert("Passwords do not match");
     setLoading(true);
     try {
-      const res = await axios.post(`${API}/api/auth/register`, { mobile, password });
+      const res = await axios.post(`${API}/api/auth/register`, {
+        mobile,
+        password,
+        ref: refCode || null
+      });
       if (res.data?.success) {
         alert("Account created! Please login.");
         router.push("/");
@@ -57,10 +68,25 @@ export default function RegisterPage() {
           <h2 style={{ fontFamily: "'Orbitron', sans-serif", fontSize: 24, fontWeight: 700, color: "#fff", marginBottom: 6 }}>
             Create Account
           </h2>
-          <p style={{ color: "var(--text-muted)", fontSize: 14, fontFamily: "'Inter', sans-serif" }}>
+          <p style={{ color: "var(--text-muted)", fontSize: 14 }}>
             Join Wingo Royal today
           </p>
         </div>
+
+        {/* Refer code badge */}
+        {refCode && (
+          <div style={{
+            background: "rgba(245,197,24,0.08)", border: "1px solid rgba(245,197,24,0.25)",
+            borderRadius: 10, padding: "10px 14px", marginBottom: 16,
+            display: "flex", alignItems: "center", gap: 8
+          }}>
+            <span style={{ fontSize: 16 }}>🎁</span>
+            <div>
+              <div style={{ fontSize: 12, color: "var(--gold)", fontWeight: 700 }}>Referred by a friend!</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Code: {refCode}</div>
+            </div>
+          </div>
+        )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
@@ -94,7 +120,20 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* Password strength indicator */}
+          {/* Refer code input (manual) */}
+          <div>
+            <label style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6, display: "block", textTransform: "uppercase", letterSpacing: 1 }}>
+              Refer Code (Optional)
+            </label>
+            <div style={{ position: "relative" }}>
+              <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 16 }}>🎁</span>
+              <input type="text" placeholder="Enter refer code" value={refCode}
+                onChange={e => setRefCode(e.target.value.toUpperCase())}
+                className="input-field" style={{ paddingLeft: 40 }} />
+            </div>
+          </div>
+
+          {/* Password strength */}
           {password && (
             <div style={{ display: "flex", gap: 4, marginTop: -4 }}>
               {[...Array(4)].map((_, i) => (
@@ -119,5 +158,13 @@ export default function RegisterPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: "100vh", background: "#0a0a0a" }} />}>
+      <RegisterForm />
+    </Suspense>
   );
 }
