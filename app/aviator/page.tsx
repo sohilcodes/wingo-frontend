@@ -51,6 +51,11 @@ export default function AviatorPage() {
         setCurrentRound(res.data.round);
         if (res.data.round.status === "flying") {
           setStatus("flying");
+          startFlying();
+        } else if (res.data.round.status === "waiting") {
+          startWaiting();
+        } else {
+          startWaiting();
         }
       } else {
         startWaiting();
