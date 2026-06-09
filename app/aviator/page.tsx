@@ -435,13 +435,14 @@ export default function AviatorPage() {
         )}
 
         {status === "flying" && !betPlaced && (
-          <div style={{
-            width: "100%", padding: 16, borderRadius: 12,
-            background: "#161b27", border: "1px solid #2a3040",
-            color: "#555", fontWeight: 700, fontSize: 15, textAlign: "center"
-          }}>
-            ⏳ Round in progress — bet in next round
-          </div>
+          <button onClick={handlePlaceBet}
+            style={{
+              width: "100%", padding: 16, borderRadius: 12, border: "none",
+              background: "linear-gradient(135deg, #f39c12, #e67e22)",
+              color: "#fff", fontWeight: 800, fontSize: 16, cursor: "pointer"
+            }}>
+            🎰 Place Bet ₹{betAmount}
+          </button>
         )}
 
         {status === "crashed" && (
