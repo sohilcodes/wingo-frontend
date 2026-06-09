@@ -77,6 +77,8 @@ export default function AviatorPage() {
     setCashedOut(false);
     setWinAmount(null);
     setCountdown(5);
+    // Fetch fresh round so currentRound.id is available for betting
+    fetchCurrentRound();
 
     let c = 5;
     const ct = setInterval(() => {
@@ -142,13 +144,14 @@ export default function AviatorPage() {
     if (status !== "waiting") return alert("Wait for next round!");
     if (betAmount < 10 || betAmount > 8000) return alert("Bet must be ₹10 - ₹8000");
     if (balance < betAmount) return alert("Insufficient balance!");
-    if (!currentRound?.id) return alert("Round not ready, please wait!");
+    // If no round from backend, create one locally
+    const roundId = currentRound?.id || "local-" + Date.now();
 
     try {
       const token = localStorage.getItem("token");
       const res = await axios.post(`${API}/api/aviator/bet`, {
         userId: user?.id,
-        roundId: currentRound.id,
+        roundId: roundId,
         amount: betAmount,
         autoCashout: autoCashout ? parseFloat(autoCashout) : null,
       }, { headers: { Authorization: `Bearer ${token}` } });
@@ -488,4 +491,5 @@ export default function AviatorPage() {
       </div>
     </div>
   );
-}
+    }
+              
