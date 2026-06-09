@@ -49,16 +49,6 @@ export default function AviatorPage() {
       const res = await axios.get(`${API}/api/aviator/current`);
       if (res.data?.round) {
         setCurrentRound(res.data.round);
-        if (res.data.round.status === "flying") {
-          setStatus("flying");
-          startFlying();
-        } else if (res.data.round.status === "waiting") {
-          startWaiting();
-        } else {
-          startWaiting();
-        }
-      } else {
-        startWaiting();
       }
     } catch {
       startWaiting();
@@ -75,6 +65,9 @@ export default function AviatorPage() {
   };
 
   const startWaiting = () => {
+    // Clear any existing intervals first
+    if (intervalRef.current) clearInterval(intervalRef.current);
+
     setStatus("waiting");
     setMultiplier(1.00);
     multiplierRef.current = 1.00;
@@ -82,8 +75,6 @@ export default function AviatorPage() {
     setCashedOut(false);
     setWinAmount(null);
     setCountdown(5);
-    // Fetch fresh round so currentRound.id is available for betting
-    fetchCurrentRound();
 
     let c = 5;
     const ct = setInterval(() => {
@@ -94,6 +85,7 @@ export default function AviatorPage() {
         startFlying();
       }
     }, 1000);
+    intervalRef.current = ct;
   };
 
   const startFlying = () => {
