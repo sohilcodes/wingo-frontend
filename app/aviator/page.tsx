@@ -1,11 +1,43 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
 
 const API = "https://wingo-backend-gtqa.onrender.com";
+
+// ── Game config ────────────────────────────────────────
+const WAITING_SECS = 8;   // betting phase
+const TICK_MS = 100;       // multiplier update interval
+
+function generateCrash(): number {
+  const r = Math.random();
+  if (r < 0.05) return 1.00;
+  if (r < 0.40) return parseFloat((1 + Math.random() * 1.5).toFixed(2));
+  if (r < 0.70) return parseFloat((2 + Math.random() * 3).toFixed(2));
+  if (r < 0.90) return parseFloat((5 + Math.random() * 10).toFixed(2));
+  return parseFloat((15 + Math.random() * 85).toFixed(2));
+}
+
+type Phase = "waiting" | "flying" | "crashed";
+
+interface BetSlot {
+  amount: number;
+  placed: boolean;
+  cashedOut: boolean;
+  cashoutMulti: number | null;
+  winAmount: number | null;
+  betId: string | null;
+  autoCashout: string;
+  mode: "bet" | "auto";
+}
+
+const defaultSlot = (): BetSlot => ({
+  amount: 100, placed: false, cashedOut: false,
+  cashoutMulti: null, winAmount: null, betId: null,
+  autoCashout: "", mode: "bet"
+});
 
 export default function AviatorPage() {
   const router = useRouter();
@@ -13,481 +45,475 @@ export default function AviatorPage() {
   const [balance, setBalance] = useState(0);
 
   // Game state
-  const [status, setStatus] = useState<"waiting" | "flying" | "crashed">("waiting");
+  const [phase, setPhase] = useState<Phase>("waiting");
   const [multiplier, setMultiplier] = useState(1.00);
-  const [crashPoint, setCrashPoint] = useState<number | null>(null);
-  const [currentRound, setCurrentRound] = useState<any>(null);
+  const [countdown, setCountdown] = useState(WAITING_SECS);
+  const [crashPoint, setCrashPoint] = useState(0);
   const [history, setHistory] = useState<number[]>([]);
-  const [countdown, setCountdown] = useState(5);
+  const [roundId, setRoundId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"all"|"my"|"top">("all");
 
-  // Bet state
-  const [betAmount, setBetAmount] = useState(100);
-  const [autoCashout, setAutoCashout] = useState<string>("");
-  const [activeBet, setActiveBet] = useState<any>(null);
-  const [betPlaced, setBetPlaced] = useState(false);
-  const [cashedOut, setCashedOut] = useState(false);
-  const [winAmount, setWinAmount] = useState<number | null>(null);
+  // 2 bet slots
+  const [slots, setSlots] = useState<[BetSlot, BetSlot]>([defaultSlot(), defaultSlot()]);
 
-  const intervalRef = useRef<any>(null);
-  const multiplierRef = useRef(1.00);
+  const phaseRef = useRef<Phase>("waiting");
+  const multiRef = useRef(1.00);
+  const crashRef = useRef(0);
+  const tickRef = useRef<any>(null);
+  const countRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef<any>(null);
-  const planeYRef = useRef(0.8);
+  const animRef = useRef<any>(null);
+  const planeXRef = useRef(0.1);
+  const planeYRef = useRef(0.85);
 
   useEffect(() => {
     const u = localStorage.getItem("user");
     if (!u) { router.push("/"); return; }
-    const parsed = JSON.parse(u);
-    setUser(parsed);
-    setBalance(parsed.balance ?? 0);
-    fetchCurrentRound();
+    const p = JSON.parse(u);
+    setUser(p); setBalance(p.balance ?? 0);
     fetchHistory();
+    startRound();
+    return () => {
+      clearInterval(tickRef.current);
+      clearInterval(countRef.current);
+      cancelAnimationFrame(animRef.current);
+    };
   }, []);
 
-  const fetchCurrentRound = async () => {
-    try {
-      const res = await axios.get(`${API}/api/aviator/current`);
-      if (res.data?.round) {
-        setCurrentRound(res.data.round);
-      }
-    } catch {
-      startWaiting();
+  // ── Canvas animation ────────────────────────────────
+  useEffect(() => {
+    drawCanvas();
+  }, [phase, multiplier]);
+
+  const drawCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const W = canvas.width, H = canvas.height;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Background
+    ctx.fillStyle = "#060d1f";
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid lines
+    ctx.strokeStyle = "rgba(99,179,237,0.06)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < W; i += 40) {
+      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, H); ctx.stroke();
     }
-  };
+    for (let i = 0; i < H; i += 40) {
+      ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(W, i); ctx.stroke();
+    }
 
-  const fetchHistory = async () => {
-    try {
-      const res = await axios.get(`${API}/api/aviator/history`);
-      if (res.data?.rounds) {
-        setHistory(res.data.rounds.map((r: any) => r.crash_point));
-      }
-    } catch {}
-  };
+    if (phase === "crashed") {
+      // Red flash on crash
+      ctx.fillStyle = "rgba(239,68,68,0.08)";
+      ctx.fillRect(0, 0, W, H);
 
-  const startWaiting = () => {
-    // Clear any existing intervals first
-    if (intervalRef.current) clearInterval(intervalRef.current);
+      ctx.font = "bold 22px Orbitron, monospace";
+      ctx.fillStyle = "#ef4444";
+      ctx.textAlign = "center";
+      ctx.fillText(`FLEW AWAY @ ${crashRef.current.toFixed(2)}x`, W/2, H/2 - 20);
+      ctx.font = "14px sans-serif";
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      ctx.fillText("Next round starting...", W/2, H/2 + 16);
+      return;
+    }
 
-    setStatus("waiting");
+    if (phase === "waiting") {
+      ctx.font = "bold 48px Orbitron, monospace";
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.fillText(String(countdown), W/2, H/2 - 10);
+      ctx.font = "14px sans-serif";
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.fillText("PLACE YOUR BETS", W/2, H/2 + 28);
+
+      // Plane idle
+      ctx.font = "32px serif";
+      ctx.fillText("✈️", W * 0.15, H * 0.82);
+      return;
+    }
+
+    // Flying — draw curve
+    const progress = Math.min((multiRef.current - 1) / 20, 1);
+    planeXRef.current = 0.08 + progress * 0.78;
+    planeYRef.current = 0.88 - progress * 0.72;
+
+    const pts: [number,number][] = [];
+    for (let t = 0; t <= progress; t += 0.01) {
+      pts.push([W * (0.08 + t * 0.78), H * (0.88 - t * 0.72)]);
+    }
+
+    if (pts.length > 1) {
+      const grad = ctx.createLinearGradient(pts[0][0], pts[0][1], pts[pts.length-1][0], pts[pts.length-1][1]);
+      grad.addColorStop(0, "rgba(56,97,251,0.1)");
+      grad.addColorStop(1, "rgba(56,97,251,0.6)");
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      pts.forEach(([x,y]) => ctx.lineTo(x, y));
+      ctx.stroke();
+
+      // Fill under curve
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], H);
+      pts.forEach(([x,y]) => ctx.lineTo(x, y));
+      ctx.lineTo(pts[pts.length-1][0], H);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(56,97,251,0.06)";
+      ctx.fill();
+    }
+
+    // Plane
+    const px = W * planeXRef.current;
+    const py = H * planeYRef.current;
+    ctx.font = "28px serif";
+    ctx.textAlign = "left";
+    ctx.fillText("✈️", px - 14, py + 10);
+
+    // Glow
+    const grd = ctx.createRadialGradient(px, py, 0, px, py, 30);
+    grd.addColorStop(0, "rgba(56,97,251,0.25)");
+    grd.addColorStop(1, "transparent");
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(px, py, 30, 0, Math.PI*2);
+    ctx.fill();
+  }, [phase, multiplier, countdown]);
+
+  // ── Start round ────────────────────────────────────
+  const startRound = useCallback(() => {
+    clearInterval(tickRef.current);
+    clearInterval(countRef.current);
+
+    const crash = generateCrash();
+    crashRef.current = crash;
+    setCrashPoint(crash);
+    phaseRef.current = "waiting";
+    setPhase("waiting");
+    multiRef.current = 1.00;
     setMultiplier(1.00);
-    multiplierRef.current = 1.00;
-    setBetPlaced(false);
-    setCashedOut(false);
-    setWinAmount(null);
-    setCountdown(5);
+    setCountdown(WAITING_SECS);
+    setSlots([defaultSlot(), defaultSlot()]);
 
-    let c = 5;
-    const ct = setInterval(() => {
+    // Fetch round from backend
+    axios.get(`${API}/api/aviator/current`).then(r => {
+      if (r.data?.round?.id) setRoundId(r.data.round.id);
+    }).catch(() => setRoundId("local-" + Date.now()));
+
+    // Countdown
+    let c = WAITING_SECS;
+    countRef.current = setInterval(() => {
       c--;
       setCountdown(c);
       if (c <= 0) {
-        clearInterval(ct);
-        startFlying();
+        clearInterval(countRef.current);
+        beginFly(crash);
       }
     }, 1000);
-    intervalRef.current = ct;
-  };
+  }, []);
 
-  const startFlying = () => {
-    setStatus("flying");
-    multiplierRef.current = 1.00;
+  const beginFly = useCallback((crash: number) => {
+    phaseRef.current = "flying";
+    setPhase("flying");
+    multiRef.current = 1.00;
     setMultiplier(1.00);
 
-    // Random crash between 1.1x and 20x (weighted towards lower)
-    const crash = parseFloat((Math.random() < 0.5
-      ? (1 + Math.random() * 2)
-      : Math.random() < 0.8
-        ? (1 + Math.random() * 5)
-        : (1 + Math.random() * 19)
-    ).toFixed(2));
-    setCrashPoint(crash);
-
-    intervalRef.current = setInterval(() => {
-      const current = multiplierRef.current;
-      const increment = current < 2 ? 0.01 : current < 5 ? 0.02 : current < 10 ? 0.05 : 0.1;
-      const next = parseFloat((current + increment).toFixed(2));
-      multiplierRef.current = next;
-      setMultiplier(next);
+    const start = Date.now();
+    tickRef.current = setInterval(() => {
+      const elapsed = (Date.now() - start) / 1000;
+      const m = parseFloat(Math.pow(Math.E, 0.07 * elapsed).toFixed(2));
+      multiRef.current = m;
+      setMultiplier(m);
 
       // Auto cashout check
-      if (autoCashout && parseFloat(autoCashout) > 0 && next >= parseFloat(autoCashout)) {
-        if (activeBet && !cashedOut) {
-          handleCashout(next);
+      setSlots(prev => prev.map(slot => {
+        if (slot.placed && !slot.cashedOut && slot.mode === "auto" &&
+            slot.autoCashout && m >= parseFloat(slot.autoCashout)) {
+          doCashout(slot, m);
+          return { ...slot, cashedOut: true, cashoutMulti: m, winAmount: parseFloat((slot.amount * m).toFixed(2)) };
         }
-      }
+        return slot;
+      }) as [BetSlot, BetSlot]);
 
-      if (next >= crash) {
-        clearInterval(intervalRef.current);
+      if (m >= crash) {
+        clearInterval(tickRef.current);
         doCrash(crash);
       }
-    }, 100);
-  };
+    }, TICK_MS);
+  }, []);
 
-  const doCrash = (crash: number) => {
-    setStatus("crashed");
-    setCrashPoint(crash);
+  const doCrash = useCallback((crash: number) => {
+    crashRef.current = crash;
+    phaseRef.current = "crashed";
+    setPhase("crashed");
     setHistory(prev => [crash, ...prev].slice(0, 20));
+    setMultiplier(crash);
+    setTimeout(() => startRound(), 3000);
+  }, [startRound]);
 
-    if (activeBet && !cashedOut) {
-      setActiveBet(null);
-    }
-
-    setTimeout(() => {
-      startWaiting();
-    }, 3000);
-  };
-
-  const handlePlaceBet = async () => {
-    if (status !== "waiting") return alert("Wait for next round!");
-    if (betAmount < 10 || betAmount > 8000) return alert("Bet must be ₹10 - ₹8000");
-    if (balance < betAmount) return alert("Insufficient balance!");
-    // If no round from backend, create one locally
-    const roundId = currentRound?.id || "local-" + Date.now();
+  // ── Bet actions ────────────────────────────────────
+  const placeBet = async (idx: 0|1) => {
+    const slot = slots[idx];
+    if (phaseRef.current !== "waiting") return alert("Wait for next round!");
+    if (slot.amount < 10) return alert("Min bet ₹10");
+    if (slot.amount > balance) return alert("Insufficient balance!");
 
     try {
       const token = localStorage.getItem("token");
       const res = await axios.post(`${API}/api/aviator/bet`, {
-        userId: user?.id,
-        roundId: roundId,
-        amount: betAmount,
-        autoCashout: autoCashout ? parseFloat(autoCashout) : null,
+        userId: user?.id, roundId: roundId || "local", amount: slot.amount,
+        autoCashout: slot.autoCashout ? parseFloat(slot.autoCashout) : null,
       }, { headers: { Authorization: `Bearer ${token}` } });
 
-      if (res.data?.success) {
-        setActiveBet(res.data.bet);
-        setBetPlaced(true);
-        setBalance(prev => prev - betAmount);
-        const u = JSON.parse(localStorage.getItem("user") || "{}");
-        localStorage.setItem("user", JSON.stringify({ ...u, balance: balance - betAmount }));
-      } else {
-        alert(res.data?.error || "Bet failed");
-      }
-    } catch {
-      alert("Network error");
-    }
-  };
+      const betId = res.data?.bet?.id || "local-" + Date.now();
+      const newBal = balance - slot.amount;
+      setBalance(newBal);
+      setUser((u: any) => ({ ...u, balance: newBal }));
+      localStorage.setItem("user", JSON.stringify({ ...user, balance: newBal }));
 
-  const handleCashout = async (currentMult?: number) => {
-    if (!activeBet || cashedOut) return;
-    const mult = currentMult || multiplierRef.current;
-    setCashedOut(true);
-
-    try {
-      const res = await axios.post(`${API}/api/aviator/cashout`, {
-        betId: activeBet.id,
-        userId: user?.id,
-        multiplier: mult,
+      setSlots(prev => {
+        const n = [...prev] as [BetSlot, BetSlot];
+        n[idx] = { ...n[idx], placed: true, betId };
+        return n;
       });
-
-      if (res.data?.success) {
-        const won = res.data.winAmount;
-        setWinAmount(won);
-        setBalance(prev => prev + won);
-        const u = JSON.parse(localStorage.getItem("user") || "{}");
-        localStorage.setItem("user", JSON.stringify({ ...u, balance: balance + won }));
-        setActiveBet(null);
-      }
     } catch {
-      setCashedOut(false);
+      // Offline mode
+      const newBal = balance - slot.amount;
+      setBalance(newBal);
+      setSlots(prev => {
+        const n = [...prev] as [BetSlot, BetSlot];
+        n[idx] = { ...n[idx], placed: true, betId: "local-" + Date.now() };
+        return n;
+      });
     }
   };
 
-  const getMultiplierColor = () => {
-    if (status === "crashed") return "#ff4757";
-    if (multiplier >= 5) return "#ffd700";
-    if (multiplier >= 2) return "#2ed573";
-    return "#ffffff";
+  const doCashout = async (slot: BetSlot, m: number) => {
+    if (!slot.placed || slot.cashedOut) return;
+    const win = parseFloat((slot.amount * m).toFixed(2));
+    try {
+      const token = localStorage.getItem("token");
+      await axios.post(`${API}/api/aviator/cashout`, {
+        betId: slot.betId, multiplier: m, userId: user?.id,
+      }, { headers: { Authorization: `Bearer ${token}` } });
+    } catch {}
+    setBalance(prev => prev + win);
+    setUser((u: any) => ({ ...u, balance: (u?.balance || 0) + win }));
+    localStorage.setItem("user", JSON.stringify({ ...user, balance: (user?.balance || 0) + win }));
   };
 
-  const getCrashBadgeColor = (val: number) => {
-    if (val < 1.5) return "#ff4757";
-    if (val < 3) return "#ffa502";
-    if (val < 10) return "#2ed573";
-    return "#ffd700";
+  const cashout = async (idx: 0|1) => {
+    const slot = slots[idx];
+    if (!slot.placed || slot.cashedOut || phaseRef.current !== "flying") return;
+    const m = multiRef.current;
+    const win = parseFloat((slot.amount * m).toFixed(2));
+    await doCashout(slot, m);
+    setSlots(prev => {
+      const n = [...prev] as [BetSlot, BetSlot];
+      n[idx] = { ...n[idx], cashedOut: true, cashoutMulti: m, winAmount: win };
+      return n;
+    });
   };
+
+  const updateSlot = (idx: 0|1, key: keyof BetSlot, val: any) => {
+    setSlots(prev => {
+      const n = [...prev] as [BetSlot, BetSlot];
+      n[idx] = { ...n[idx], [key]: val };
+      return n;
+    });
+  };
+
+  const fetchHistory = async () => {
+    try {
+      const r = await axios.get(`${API}/api/aviator/history`);
+      if (r.data?.rounds) setHistory(r.data.rounds.map((x: any) => x.crash_point));
+    } catch {}
+  };
+
+  // ── Multiplier color ───────────────────────────────
+  const multiColor = multiplier < 2 ? "#fff" : multiplier < 5 ? "#4ade80" : multiplier < 10 ? "#facc15" : "#f87171";
 
   return (
-    <div style={{
-      minHeight: "100vh",
-      background: "#0a0e1a",
-      paddingBottom: 80,
-      fontFamily: "'Rajdhani', sans-serif",
-      color: "#fff"
-    }}>
+    <div style={{ minHeight:"100vh", background:"#060d1f", paddingBottom:80, fontFamily:"'Rajdhani',sans-serif" }}>
 
-      {/* HEADER */}
+      {/* Header */}
       <div style={{
-        background: "linear-gradient(135deg, #0d1117, #161b27)",
-        padding: "12px 16px",
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-        borderBottom: "1px solid rgba(255,255,255,0.05)"
+        background:"rgba(6,13,31,0.95)", borderBottom:"1px solid rgba(255,255,255,0.06)",
+        padding:"10px 16px", display:"flex", alignItems:"center", justifyContent:"space-between",
+        position:"sticky", top:0, zIndex:50, backdropFilter:"blur(10px)"
       }}>
-        <button onClick={() => router.push("/home")} style={{
-          background: "rgba(255,255,255,0.08)", border: "none", color: "#fff",
-          width: 36, height: 36, borderRadius: "50%", fontSize: 18
-        }}>←</button>
-        <div style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 900, letterSpacing: 3, color: "#ff4757" }}>
-          ✈️ AVIATOR
+        <button onClick={() => router.push("/home")}
+          style={{ background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"6px 12px", color:"#fff", fontSize:18 }}>
+          ←
+        </button>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:20 }}>✈️</span>
+          <span style={{ fontFamily:"'Orbitron',sans-serif", fontSize:18, fontWeight:900, color:"#ef4444", letterSpacing:2 }}>Aviator</span>
         </div>
         <div style={{
-          background: "rgba(255,215,0,0.1)", border: "1px solid rgba(255,215,0,0.3)",
-          borderRadius: 20, padding: "4px 12px", fontSize: 13, fontWeight: 700, color: "#ffd700"
-        }}>₹{balance.toLocaleString("en-IN")}</div>
+          background:"rgba(245,197,24,0.1)", border:"1px solid rgba(245,197,24,0.3)",
+          borderRadius:20, padding:"5px 14px", color:"#f5c518", fontSize:14, fontWeight:700
+        }}>
+          ₹{balance.toLocaleString("en-IN")}
+        </div>
       </div>
 
-      {/* CRASH HISTORY */}
-      <div style={{
-        background: "#0d1117", padding: "8px 12px",
-        display: "flex", gap: 6, overflowX: "auto",
-        borderBottom: "1px solid rgba(255,255,255,0.05)"
-      }}>
-        {history.slice(0, 12).map((h, i) => (
-          <div key={i} style={{
-            flexShrink: 0, padding: "3px 8px", borderRadius: 20,
-            background: getCrashBadgeColor(h) + "22",
-            border: `1px solid ${getCrashBadgeColor(h)}44`,
-            color: getCrashBadgeColor(h), fontSize: 11, fontWeight: 700,
-            fontFamily: "monospace"
-          }}>{h.toFixed(2)}x</div>
-        ))}
-      </div>
+      <div style={{ maxWidth:480, margin:"0 auto" }}>
 
-      {/* GAME CANVAS */}
-      <div style={{
-        background: "linear-gradient(180deg, #0a0e1a 0%, #0d1428 100%)",
-        height: 260, position: "relative", overflow: "hidden",
-        display: "flex", alignItems: "center", justifyContent: "center"
-      }}>
-        {/* Stars background */}
-        {[...Array(20)].map((_, i) => (
-          <div key={i} style={{
-            position: "absolute",
-            left: `${Math.random() * 100}%`,
-            top: `${Math.random() * 100}%`,
-            width: 2, height: 2, borderRadius: "50%",
-            background: "rgba(255,255,255,0.4)"
-          }} />
-        ))}
-
-        {/* Grid lines */}
+        {/* History */}
         <div style={{
-          position: "absolute", inset: 0,
-          backgroundImage: "linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)",
-          backgroundSize: "40px 40px"
-        }} />
+          display:"flex", gap:6, padding:"8px 12px", overflowX:"auto",
+          background:"rgba(255,255,255,0.02)", borderBottom:"1px solid rgba(255,255,255,0.04)"
+        }}>
+          {history.map((h,i) => {
+            const color = h < 2 ? "#ef4444" : h < 5 ? "#3b82f6" : "#4ade80";
+            return (
+              <div key={i} style={{
+                flexShrink:0, padding:"3px 10px", borderRadius:20,
+                background:`${color}18`, border:`1px solid ${color}44`,
+                fontSize:12, fontWeight:700, color, whiteSpace:"nowrap"
+              }}>{h.toFixed(2)}x</div>
+            );
+          })}
+        </div>
 
-        {/* Multiplier display */}
-        <div style={{ textAlign: "center", zIndex: 10 }}>
-          {status === "waiting" ? (
-            <div>
-              <div style={{ fontSize: 14, color: "rgba(255,255,255,0.5)", marginBottom: 8 }}>Next round in</div>
-              <div style={{
-                fontSize: 72, fontWeight: 900, fontFamily: "monospace",
-                color: "#fff", textShadow: "0 0 40px rgba(255,255,255,0.3)"
-              }}>{countdown}</div>
-              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", marginTop: 4 }}>Place your bets!</div>
-            </div>
-          ) : status === "crashed" ? (
-            <div>
-              <div style={{ fontSize: 16, color: "#ff4757", marginBottom: 4, fontWeight: 700 }}>FLEW AWAY!</div>
-              <div style={{
-                fontSize: 64, fontWeight: 900, fontFamily: "monospace",
-                color: "#ff4757", textShadow: "0 0 40px rgba(255,71,87,0.5)"
-              }}>{crashPoint?.toFixed(2)}x</div>
-            </div>
-          ) : (
-            <div>
-              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", marginBottom: 4 }}>Current Multiplier</div>
-              <div style={{
-                fontSize: 72, fontWeight: 900, fontFamily: "monospace",
-                color: getMultiplierColor(),
-                textShadow: `0 0 40px ${getMultiplierColor()}66`,
-                transition: "color 0.3s"
-              }}>{multiplier.toFixed(2)}x</div>
+        {/* Canvas */}
+        <div style={{ position:"relative", background:"#060d1f" }}>
+          <canvas ref={canvasRef} width={480} height={240}
+            style={{ width:"100%", height:"auto", display:"block" }} />
 
-              {/* Plane emoji */}
+          {/* Multiplier overlay */}
+          {phase === "flying" && (
+            <div style={{
+              position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)",
+              textAlign:"center", pointerEvents:"none"
+            }}>
               <div style={{
-                fontSize: 36, marginTop: 8,
-                animation: "fly 0.5s ease-in-out infinite alternate"
-              }}>✈️</div>
+                fontFamily:"'Orbitron',sans-serif", fontSize:52, fontWeight:900,
+                color: multiColor, textShadow:`0 0 30px ${multiColor}80`,
+                transition:"color 0.3s"
+              }}>
+                {multiplier.toFixed(2)}x
+              </div>
             </div>
           )}
         </div>
 
-        {/* Win popup */}
-        {cashedOut && winAmount && (
-          <div style={{
-            position: "absolute", top: 16, right: 16,
-            background: "linear-gradient(135deg, #27ae60, #2ecc71)",
-            borderRadius: 12, padding: "10px 16px",
-            fontWeight: 800, fontSize: 16,
-            boxShadow: "0 4px 20px rgba(39,174,96,0.5)",
-            animation: "popIn 0.3s ease"
-          }}>
-            +₹{winAmount.toFixed(2)} 🎉
-          </div>
-        )}
-      </div>
+        {/* Bet panels — 2 slots */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:0 }}>
+          {([0,1] as const).map(idx => {
+            const slot = slots[idx];
+            const isWaiting = phase === "waiting";
+            const isFlying = phase === "flying";
+            const canBet = isWaiting && !slot.placed;
+            const canCashout = isFlying && slot.placed && !slot.cashedOut;
 
-      {/* BET PANEL */}
-      <div style={{ padding: "16px 12px", maxWidth: 500, margin: "0 auto" }}>
+            return (
+              <div key={idx} style={{
+                background: idx === 0 ? "#0d1525" : "#0a1020",
+                borderTop:"1px solid rgba(255,255,255,0.06)",
+                borderRight: idx === 0 ? "1px solid rgba(255,255,255,0.06)" : "none",
+                padding:"12px 10px"
+              }}>
+                {/* Tabs */}
+                <div style={{ display:"flex", gap:4, marginBottom:10 }}>
+                  {(["bet","auto"] as const).map(m => (
+                    <button key={m} onClick={() => !slot.placed && updateSlot(idx, "mode", m)}
+                      style={{
+                        flex:1, padding:"5px", borderRadius:6, fontWeight:700, fontSize:12,
+                        background: slot.mode===m ? "rgba(255,255,255,0.12)" : "transparent",
+                        color: slot.mode===m ? "#fff" : "rgba(255,255,255,0.35)",
+                        border:`1px solid ${slot.mode===m ? "rgba(255,255,255,0.2)" : "transparent"}`,
+                        cursor: slot.placed ? "not-allowed" : "pointer", textTransform:"capitalize"
+                      }}>
+                      {m === "bet" ? "Bet" : "Auto"}
+                    </button>
+                  ))}
+                </div>
 
-        {/* Quick amounts */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 12 }}>
-          {[50, 100, 500, 1000].map(amt => (
-            <button key={amt} onClick={() => setBetAmount(amt)}
-              style={{
-                padding: "8px 4px", borderRadius: 8, fontWeight: 700, fontSize: 13,
-                background: betAmount === amt ? "rgba(255,71,87,0.2)" : "#161b27",
-                border: `1px solid ${betAmount === amt ? "#ff4757" : "#1e2433"}`,
-                color: betAmount === amt ? "#ff4757" : "#888",
-                transition: "all 0.15s"
-              }}>₹{amt}</button>
-          ))}
-        </div>
+                {/* Amount */}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+                  background:"#060d1f", borderRadius:10, padding:"8px 10px", marginBottom:8,
+                  border:"1px solid rgba(255,255,255,0.08)"
+                }}>
+                  <button onClick={() => updateSlot(idx, "amount", Math.max(10, slot.amount - 50))}
+                    disabled={slot.placed}
+                    style={{ background:"rgba(255,255,255,0.06)", border:"none", borderRadius:6, width:28, height:28, color:"#fff", fontSize:18, cursor:"pointer" }}>−</button>
+                  <span style={{ fontFamily:"'Orbitron',sans-serif", fontWeight:700, color:"#fff", fontSize:16 }}>
+                    {slot.amount}
+                  </span>
+                  <button onClick={() => updateSlot(idx, "amount", slot.amount + 50)}
+                    disabled={slot.placed}
+                    style={{ background:"rgba(255,255,255,0.06)", border:"none", borderRadius:6, width:28, height:28, color:"#fff", fontSize:18, cursor:"pointer" }}>+</button>
+                </div>
 
-        {/* Bet amount input */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <div style={{ flex: 1, position: "relative" }}>
-            <span style={{
-              position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)",
-              color: "#ffd700", fontWeight: 700
-            }}>₹</span>
-            <input
-              type="number" min={10} max={8000}
-              value={betAmount}
-              onChange={e => setBetAmount(Number(e.target.value))}
-              style={{
-                width: "100%", padding: "12px 12px 12px 28px", borderRadius: 10,
-                background: "#161b27", border: "1px solid #2a3040",
-                color: "#fff", fontSize: 15, fontWeight: 700, boxSizing: "border-box"
-              }}
-            />
-          </div>
-          <div style={{ flex: 1, position: "relative" }}>
-            <span style={{
-              position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)",
-              color: "#888", fontSize: 11
-            }}>AUTO</span>
-            <input
-              type="number" placeholder="2.00"
-              value={autoCashout}
-              onChange={e => setAutoCashout(e.target.value)}
-              style={{
-                width: "100%", padding: "12px 12px 12px 44px", borderRadius: 10,
-                background: "#161b27", border: "1px solid #2a3040",
-                color: "#fff", fontSize: 15, fontWeight: 700, boxSizing: "border-box"
-              }}
-            />
-          </div>
-        </div>
+                {/* Quick amounts */}
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:4, marginBottom:8 }}>
+                  {[10,100,500,1000].map(a => (
+                    <button key={a} onClick={() => !slot.placed && updateSlot(idx, "amount", a)}
+                      disabled={slot.placed}
+                      style={{
+                        padding:"4px", borderRadius:6, fontSize:11, fontWeight:600,
+                        background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)",
+                        color:"rgba(255,255,255,0.5)", cursor: slot.placed ? "not-allowed" : "pointer"
+                      }}>
+                      {a}
+                    </button>
+                  ))}
+                </div>
 
-        {/* Action button */}
-        {status === "waiting" && !betPlaced && (
-          <button onClick={handlePlaceBet}
-            style={{
-              width: "100%", padding: 16, borderRadius: 12, border: "none",
-              background: "linear-gradient(135deg, #ff4757, #ff6b81)",
-              color: "#fff", fontWeight: 800, fontSize: 18,
-              boxShadow: "0 4px 20px rgba(255,71,87,0.4)",
-              transition: "transform 0.1s"
-            }}
-            onMouseDown={e => (e.currentTarget.style.transform = "scale(0.97)")}
-            onMouseUp={e => (e.currentTarget.style.transform = "scale(1)")}>
-            🎰 Place Bet ₹{betAmount}
-          </button>
-        )}
+                {/* Auto cashout input */}
+                {slot.mode === "auto" && (
+                  <input type="number" placeholder="Auto ×"
+                    value={slot.autoCashout}
+                    onChange={e => updateSlot(idx, "autoCashout", e.target.value)}
+                    disabled={slot.placed}
+                    style={{
+                      width:"100%", padding:"7px 10px", marginBottom:8, borderRadius:8,
+                      background:"#060d1f", border:"1px solid rgba(255,255,255,0.1)",
+                      color:"#fff", fontSize:13, fontFamily:"'Rajdhani',sans-serif", outline:"none"
+                    }} />
+                )}
 
-        {status === "waiting" && betPlaced && (
-          <div style={{
-            width: "100%", padding: 16, borderRadius: 12,
-            background: "rgba(39,174,96,0.15)", border: "1px solid rgba(39,174,96,0.4)",
-            color: "#2ed573", fontWeight: 800, fontSize: 16, textAlign: "center"
-          }}>
-            ✅ Bet Placed! ₹{betAmount} — Waiting for round...
-          </div>
-        )}
+                {/* Action button */}
+                {canBet && (
+                  <button onClick={() => placeBet(idx)}
+                    style={{
+                      width:"100%", padding:"12px", borderRadius:10, border:"none",
+                      background:"linear-gradient(135deg, #22c55e, #16a34a)",
+                      color:"#fff", fontWeight:800, fontSize:15,
+                      boxShadow:"0 4px 16px rgba(34,197,94,0.35)", cursor:"pointer"
+                    }}>
+                    BET<br/>
+                    <span style={{ fontSize:12, opacity:0.9 }}>₹{slot.amount}.00 INR</span>
+                  </button>
+                )}
 
-        {status === "flying" && betPlaced && !cashedOut && (
-          <button onClick={() => handleCashout()}
-            style={{
-              width: "100%", padding: 16, borderRadius: 12, border: "none",
-              background: "linear-gradient(135deg, #27ae60, #2ecc71)",
-              color: "#fff", fontWeight: 800, fontSize: 18,
-              boxShadow: "0 4px 20px rgba(39,174,96,0.4)",
-              animation: "pulse 0.5s ease-in-out infinite alternate"
-            }}>
-            💰 Cash Out @ {multiplier.toFixed(2)}x = ₹{(betAmount * multiplier).toFixed(0)}
-          </button>
-        )}
+                {isWaiting && slot.placed && (
+                  <div style={{
+                    width:"100%", padding:"12px", borderRadius:10, textAlign:"center",
+                    background:"rgba(34,197,94,0.1)", border:"1px solid rgba(34,197,94,0.3)",
+                    color:"#22c55e", fontWeight:700, fontSize:13
+                  }}>
+                    ✅ ₹{slot.amount} placed<br/>
+                    <span style={{ fontSize:11, opacity:0.7 }}>Waiting for round...</span>
+                  </div>
+                )}
 
-        {status === "flying" && betPlaced && cashedOut && (
-          <div style={{
-            width: "100%", padding: 16, borderRadius: 12,
-            background: "rgba(39,174,96,0.15)", border: "1px solid rgba(39,174,96,0.4)",
-            color: "#2ed573", fontWeight: 800, fontSize: 16, textAlign: "center"
-          }}>
-            ✅ Cashed out! Won ₹{winAmount?.toFixed(2)}
-          </div>
-        )}
-
-        {status === "flying" && !betPlaced && (
-          <button onClick={handlePlaceBet}
-            style={{
-              width: "100%", padding: 16, borderRadius: 12, border: "none",
-              background: "linear-gradient(135deg, #f39c12, #e67e22)",
-              color: "#fff", fontWeight: 800, fontSize: 16, cursor: "pointer"
-            }}>
-            🎰 Place Bet ₹{betAmount}
-          </button>
-        )}
-
-        {status === "crashed" && (
-          <div style={{
-            width: "100%", padding: 16, borderRadius: 12,
-            background: "rgba(255,71,87,0.1)", border: "1px solid rgba(255,71,87,0.3)",
-            color: "#ff4757", fontWeight: 700, fontSize: 15, textAlign: "center"
-          }}>
-            💥 Crashed at {crashPoint?.toFixed(2)}x — Next round starting...
-          </div>
-        )}
-
-        {/* Info */}
-        <div style={{
-          marginTop: 12, background: "#161b27", borderRadius: 10,
-          padding: "10px 14px", fontSize: 12, color: "#555",
-          display: "flex", justifyContent: "space-between"
-        }}>
-          <span>Min: ₹10</span>
-          <span>Max: ₹8,000</span>
-          <span>Auto cashout: {autoCashout ? `${autoCashout}x` : "Off"}</span>
-        </div>
-      </div>
-
-      <style>{`
-        @keyframes fly {
-          from { transform: translateY(0px) rotate(-10deg); }
-          to { transform: translateY(-10px) rotate(10deg); }
-        }
-        @keyframes pulse {
-          from { box-shadow: 0 4px 20px rgba(39,174,96,0.4); }
-          to { box-shadow: 0 4px 40px rgba(39,174,96,0.8); }
-        }
-        @keyframes popIn {
-          from { transform: scale(0.8); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
-        }
-      `}</style>
-
-      {/* BOTTOM NAV */}
-      <div className="bottom-nav">
-        <Link href="/home" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg><span>Home</span></Link>
-        <Link href="/deposit" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-4H7l5-5 5 5h-4v4z"/></svg><span>Deposit</span></Link>
-        <Link href="/game" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5S14.67 12 15.5 12s1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4-3c-.83 0-1.5-.67-1.5-1.5S18.67 9 19.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg><span>Game</span></Link>
-        <Link href="/withdraw" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-4H7l5-5 5 5h-4v4z" transform="rotate(180 12 12)"/></svg><span>Withdraw</span></Link>
-        <Link href="/profile" className="nav-item"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg><span>Profile</span></Link>
-      </div>
-    </div>
-  );
-    }
-              
+                {canCashout && (
+                  <button onClick={() => cashout(idx)}
+                    style={{
+                      width:"100%", padding:"12px", borderRadius:10, border:"none",
+                      background:"linear-gradient(135deg, #f59f00, #e67e00)",
+                      color:"#fff", fontWeight:800, fontSize:14,
+                      boxShadow:"0 4px 16px rgba(245,159,0,0.4)", cursor:"pointer",
+                      animation:"pulse 0.6s ease-in-out infinite alternate"
+                    }}>
+                    CASH OUT<br/>
+                    <span style={{ fontSize:12 }}>₹{(slot.amount * multiplier).toFixed(2)}</spa
