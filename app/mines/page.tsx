@@ -58,7 +58,7 @@ export default function MinesPage() {
     try {
       const token = localStorage.getItem("token");
       const res = await axios.post(`${API}/api/mines/start`, {
-        userId: user?.id, betAmount, bombs: bombCount, gridSize
+        userId: user?.id || JSON.parse(localStorage.getItem('user')||'{}').id, betAmount, bombs: bombCount, gridSize
       }, { headers: { Authorization: `Bearer ${token}` } });
 
       if (res.data?.success) {
@@ -356,4 +356,4 @@ export default function MinesPage() {
       </div>
     </div>
   );
-}
+    }
