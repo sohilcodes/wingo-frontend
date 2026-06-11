@@ -181,7 +181,7 @@ export default function DepositPage() {
                   <div style={{ fontWeight: 700, color: "var(--gold)", fontSize: 15 }}>wingo@paytm</div>
                 </div>
                 <button
-                  onClick={() => { navigator.clipboard?.writeText("wingo@paytm"); alert("Copied!"); }}
+                  onClick={() => { navigator.clipboard?.writeText("sohilkhan21@fam"); alert("Copied!"); }}
                   style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "6px 12px", color: "var(--gold)", fontSize: 12 }}>
                   Copy
                 </button>
@@ -231,4 +231,4 @@ export default function DepositPage() {
       </div>
     </div>
   );
-}
+            }
